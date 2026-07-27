@@ -1,0 +1,12 @@
+# Pinned below the version that drops the deprecated `pkg_resources`
+# entrypoint bits some of our older deps still rely on at build time.
+setuptools<82
+Flask==3.0.3
+Werkzeug==3.0.3
+google-api-python-client==2.140.0
+parse-torrent-title==2.4
+requests==2.32.3
+urllib3==2.2.3
+beautifulsoup4==4.12.3
+lxml>=4.9.4,<6.0
+faust-cchardet==2.1.19
