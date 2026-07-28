@@ -11,6 +11,8 @@ JS below, so the placeholders stay unambiguous.
 
 from string import Template
 
+from sgd.branding import admin_whatsapp_html
+
 PAGE = Template(
     """
 <meta charset="utf-8">
@@ -148,6 +150,11 @@ PAGE = Template(
     margin: 0 0 16px;
   }
   .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(205px, 1fr)); }
+  .grid-2 { grid-template-columns: repeat(2, 1fr); margin-bottom: 14px; }
+  .grid-3 { grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 640px) {
+    .grid-2, .grid-3 { grid-template-columns: 1fr; }
+  }
   .card {
     background: var(--card);
     border: 1px solid var(--card-brd);
@@ -258,7 +265,7 @@ PAGE = Template(
 
   <section>
     <h2>Status do sistema</h2>
-    <div class="grid">
+    <div class="grid grid-2">
       $account_status_card
       <div class="card">
         <h3><span class="dot" id="drive-dot"></span> Google Drive</h3>
@@ -266,6 +273,8 @@ PAGE = Template(
         <div class="sub" id="drive-sub">Consultando a conta conectada</div>
         <div class="bar"><i id="drive-bar"></i></div>
       </div>
+    </div>
+    <div class="grid grid-3">
       <div class="card">
         <h3><span class="dot $tmdb_dot"></span> Metadados TMDB</h3>
         <div class="val">$tmdb_val</div>
@@ -283,6 +292,7 @@ PAGE = Template(
       </div>
     </div>
   </section>
+
 
   <section>
     <h2>Como funciona</h2>
@@ -405,40 +415,10 @@ PAGE = Template(
 )
 
 
-LANDING_PAGE = Template(
-    """
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex">
-<title>Stream Helium</title>
-<style>
-  :root {
-    --bg: #0a0710; --txt: #ece8f4; --txt-dim: #a79fbb; --accent: #8b5cf6;
-  }
-  body {
-    margin: 0; min-height: 100vh; display: flex; align-items: center;
-    justify-content: center; background: var(--bg); color: var(--txt);
-    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    text-align: center; padding: 24px; box-sizing: border-box;
-  }
-  a { color: var(--accent); }
-  h1 { font-size: 1.4rem; margin-bottom: .5rem; }
-  p { color: var(--txt-dim); max-width: 32rem; margin: .5rem auto; }
-</style>
-<div>
-  <h1>Stream Helium</h1>
-  <p>Este é um addon Stremio privado, com acesso por convite.</p>
-  <p>Se você recebeu um link de convite, abra-o para conectar seu Google
-  Drive. Se você é o administrador, acesse <a href="/admin">/admin</a>.</p>
-</div>
-"""
-)
-
-
 def render_landing():
-    """Generic root page - no single account is tied to '/' anymore since
-    each user has their own /u/<user_id>/ addon URL."""
-    return LANDING_PAGE.safe_substitute()
+    """Kept only for tests/back-compat imports; '/' now redirects straight
+    to /login instead of rendering a static page (see routes.py)."""
+    return ""
 
 
 def _pill(text):
@@ -457,7 +437,7 @@ def render(manifest, manifest_url, stremio_url, tmdb_enabled, proxy_enabled,
     else:
         tmdb = (
             "warn", "Não configurado",
-            "Peça ao administrador para cadastrar uma chave TMDB",
+            admin_whatsapp_html("Falta configurar a TMDB"),
         )
 
     if proxy_enabled:
@@ -475,15 +455,15 @@ def render(manifest, manifest_url, stremio_url, tmdb_enabled, proxy_enabled,
 
     if account_status:
         if not account_status.get("active", True):
-            acc = ("", "Desativada", "Sua conta foi desativada pelo administrador")
+            acc = ("", "Desativada", f"Conta desativada. {admin_whatsapp_html('Fale com o admin')}")
         elif account_status.get("expired"):
-            acc = ("", "Expirada", "Peça ao administrador pra renovar seu acesso")
+            acc = ("", "Expirada", f"Acesso expirado. {admin_whatsapp_html('Peça uma renovação')}")
         elif account_status.get("days_left") is not None:
             days = account_status["days_left"]
             acc = (
                 "warn" if days <= 3 else "ok",
                 f"Expira em {days} dia{'s' if days != 1 else ''}",
-                "Fale com o administrador se precisar de mais tempo",
+                admin_whatsapp_html("Preciso de mais tempo"),
             )
         else:
             acc = ("ok", "Ativa", "Sem prazo de expiração")

@@ -16,6 +16,7 @@ from flask import abort, redirect, request, session, Response
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from sgd import app, db
+from sgd.branding import admin_whatsapp_html
 
 logger = logging.getLogger(__name__)
 
@@ -61,12 +62,15 @@ def family_login():
             session["family_user_id"] = str(user_row["id"])
             return redirect("/home")
         elif valid:
-            error = '<p class="error">Sua conta está inativa ou expirada. Fale com o administrador.</p>'
+            error = (
+                '<p class="error">Sua conta está inativa ou expirada.</p>'
+                f'<p style="font-size:.85rem">{admin_whatsapp_html()}</p>'
+            )
         else:
             error = '<p class="error">Email ou senha incorretos.</p>'
 
     return _page(f"""
-      <h1>Entrar</h1>
+      <h1>🎬 Stream Helium</h1>
       {error}
       <form method="post">
         <input type="email" name="email" placeholder="Seu email" required autofocus>
@@ -75,6 +79,9 @@ def family_login():
       </form>
       <p style="margin-top:1rem;color:#a79fbb;font-size:.85rem">
         Ainda não definiu uma senha? Use o link de convite que você recebeu.
+      </p>
+      <p style="margin-top:1.5rem;color:#5f5670;font-size:.78rem">
+        <a href="/admin/login" style="color:#5f5670">Sou administrador</a>
       </p>
     """, title="Entrar - Stream Helium")
 

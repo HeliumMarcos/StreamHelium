@@ -43,21 +43,13 @@ def _patch_tenant(monkeypatch, user_row=None, gdrive=None, tmdb_api_key=None):
     return user_row
 
 
-def test_root_is_a_generic_landing_page(client):
-    """/ is no longer tied to a single account - it's a public page pointing
-    invited users and the admin at the right place."""
+def test_root_redirects_to_family_login(client):
+    """/ used to be a static landing page - now it sends people straight to
+    the login form, since that's the actual front door for family accounts."""
     resp = client.get("/")
 
-    assert resp.status_code == 200
-    assert resp.mimetype == "text/html"
-    body = resp.get_data(as_text=True)
-    assert "/admin" in body
-    assert "$" not in body  # no unsubstituted template placeholders
-
-
-def test_root_is_not_indexed(client):
-    resp = client.get("/")
-    assert resp.headers["X-Robots-Tag"] == "noindex"
+    assert resp.status_code == 302
+    assert resp.headers["Location"] == "/login"
 
 
 def test_health_reports_db_status(client, monkeypatch):

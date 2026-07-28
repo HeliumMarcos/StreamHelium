@@ -127,10 +127,7 @@ def _load_tenant_if_scoped():
 
 @app.route("/")
 def init():
-    page = home.render_landing()
-    resp = Response(page, mimetype="text/html; charset=utf-8")
-    resp.headers["X-Robots-Tag"] = "noindex"
-    return resp
+    return redirect("/login")
 
 
 def mask_email(email):

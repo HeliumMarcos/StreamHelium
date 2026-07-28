@@ -128,6 +128,12 @@ def test_home_with_stale_session_clears_and_redirects(client, monkeypatch):
         assert "family_user_id" not in sess
 
 
+def test_login_page_links_to_admin(client):
+    resp = client.get("/login")
+    body = resp.get_data(as_text=True)
+    assert '/admin/login' in body
+
+
 def test_set_password_mismatch_redirects_with_error(client, monkeypatch):
     monkeypatch.setattr(
         "sgd.db.get_user_by_invite_token", lambda token: _user_row(password_hash=None)
