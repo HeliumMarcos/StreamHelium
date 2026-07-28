@@ -455,13 +455,10 @@ def render(manifest, manifest_url, stremio_url, tmdb_enabled, proxy_enabled,
     if tmdb_enabled:
         tmdb = ("ok", "Ativo", "IDs tmdb: resolvidos e títulos em pt-BR disponíveis")
     else:
-        tmdb_hint = (
-            f"Adicione sua chave em {connect_url} para resolver IDs tmdb: "
-            "e ver títulos em pt-BR"
-            if connect_url else
-            "Conecte sua chave TMDB para resolver IDs tmdb: e títulos em pt-BR"
+        tmdb = (
+            "warn", "Não configurado",
+            "Peça ao administrador para cadastrar uma chave TMDB",
         )
-        tmdb = ("warn", "Não configurado", tmdb_hint)
 
     if proxy_enabled:
         proxy = (

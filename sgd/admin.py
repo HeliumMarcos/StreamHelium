@@ -1,11 +1,12 @@
 """Admin panel.
 
-Two things to manage:
-- drive_accounts: the pool of Google Drive accounts you connect yourself,
-  all pointing at the same shared folder.
+Three pools to manage, all admin-only:
+- drive_accounts: Google Drive accounts, all pointing at the same shared
+  folder.
+- tmdb_keys: TMDB API keys, used round-robin to spread rate-limit load.
 - users: family/viewer accounts, each auto-assigned to whichever pool
-  account currently has the fewest people on it, optionally with an
-  expiration date.
+  account currently has the fewest people, optionally with an expiration
+  date and a one-device-at-a-time limit.
 
 Auth: a single shared password in the ADMIN_PASSWORD env var. Intentionally
 simple - this is for one admin (you), not a multi-admin system.
@@ -40,43 +41,133 @@ def require_admin(view):
     return wrapped
 
 
-def _page(body, title="Admin - Stream Helium"):
+# --- shared chrome ----------------------------------------------------
+
+def _page(body, title="Admin - Stream Helium", active=""):
+    def nav_item(href, label, key):
+        cls = "nav-item active" if key == active else "nav-item"
+        return f'<a class="{cls}" href="{href}">{label}</a>'
+
+    nav = "".join([
+        nav_item("/admin", "Famílias", "users"),
+        nav_item("/admin/drives", "Contas Drive", "drives"),
+        nav_item("/admin/tmdb", "Chaves TMDB", "tmdb"),
+    ])
+
     html = f"""
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
 <title>{title}</title>
 <style>
-  :root {{ --bg:#0a0710; --card:rgba(255,255,255,.045); --brd:rgba(255,255,255,.09);
-           --txt:#ece8f4; --dim:#a79fbb; --accent:#8b5cf6; --ok:#34d399; --off:#6b7280;
-           --warn:#fbbf24; }}
-  * {{ box-sizing: border-box; }}
-  body {{ margin:0; background:var(--bg); color:var(--txt); padding:2rem 1rem;
-          font:15px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }}
-  main {{ max-width:56rem; margin:0 auto; }}
-  h1 {{ font-size:1.3rem; }}
-  h2 {{ font-size:1.05rem; color:var(--dim); margin-top:2.5rem; }}
-  table {{ width:100%; border-collapse:collapse; margin-top:1rem; }}
-  th, td {{ text-align:left; padding:.6rem .5rem; border-bottom:1px solid var(--brd); font-size:.9rem; }}
-  th {{ color:var(--dim); font-weight:600; }}
-  input, select {{ padding:.5rem; border-radius:.4rem; border:1px solid #332844;
-           background:#120c1c; color:var(--txt); }}
-  button {{ padding:.5rem 1rem; border-radius:.4rem; border:none; cursor:pointer;
-            background:var(--accent); color:#fff; font-weight:600; }}
-  button.danger {{ background:#ef4444; }}
+  :root {{
+    --bg:#0a0710; --bg-soft:#120c1c; --card:rgba(255,255,255,.045);
+    --card-hover:rgba(255,255,255,.07); --brd:rgba(255,255,255,.09);
+    --txt:#ece8f4; --dim:#a79fbb; --accent:#8b5cf6; --accent-2:#22d3ee;
+    --ok:#34d399; --off:#6b7280; --warn:#fbbf24; --err:#ef4444;
+  }}
+  * {{ box-sizing:border-box; }}
+  body {{
+    margin:0; background:
+      radial-gradient(60% 45% at 15% -5%, rgba(139,92,246,.20), transparent 65%),
+      radial-gradient(50% 40% at 100% 0%, rgba(34,211,238,.12), transparent 60%),
+      var(--bg);
+    color:var(--txt); min-height:100vh;
+    font:15px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }}
+  a {{ color:var(--accent-2); text-decoration:none; }}
+  main {{ max-width:64rem; margin:0 auto; padding:1.75rem 1.25rem 4rem; }}
+
+  .topbar {{ display:flex; align-items:center; justify-content:space-between;
+             flex-wrap:wrap; gap:.75rem; margin-bottom:1.5rem; }}
+  .brand {{ font-weight:700; font-size:1.05rem; letter-spacing:.01em; }}
+  .brand span {{ color:var(--accent-2); }}
+  nav {{ display:flex; gap:.35rem; background:var(--card); border:1px solid var(--brd);
+         padding:.3rem; border-radius:.7rem; }}
+  .nav-item {{ padding:.4rem .85rem; border-radius:.5rem; color:var(--dim);
+               font-size:.88rem; font-weight:600; }}
+  .nav-item.active {{ background:var(--accent); color:#fff; }}
+  .nav-item:hover:not(.active) {{ background:var(--card-hover); color:var(--txt); }}
+
+  h1 {{ font-size:1.35rem; margin:.2rem 0 .3rem; }}
+  h2 {{ font-size:1rem; color:var(--dim); font-weight:600; margin:2.2rem 0 .8rem; }}
+  .lede {{ color:var(--dim); font-size:.92rem; margin:0 0 1.2rem; max-width:38rem; }}
+
+  .stats {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(9.5rem, 1fr));
+            gap:.7rem; margin-bottom:1.6rem; }}
+  .stat {{ background:var(--card); border:1px solid var(--brd); border-radius:.8rem;
+           padding:.9rem 1rem; }}
+  .stat .n {{ font-size:1.5rem; font-weight:700; line-height:1.1; }}
+  .stat .l {{ color:var(--dim); font-size:.78rem; margin-top:.2rem; }}
+  .stat.warn .n {{ color:var(--warn); }}
+  .stat.ok .n {{ color:var(--ok); }}
+
+  .panel {{ background:var(--card); border:1px solid var(--brd); border-radius:.9rem;
+            padding:1.2rem; margin-bottom:1.2rem; }}
+
+  table {{ width:100%; border-collapse:collapse; }}
+  th, td {{ text-align:left; padding:.65rem .55rem; border-bottom:1px solid var(--brd);
+            font-size:.86rem; vertical-align:top; }}
+  th {{ color:var(--dim); font-weight:600; font-size:.78rem; text-transform:uppercase;
+        letter-spacing:.03em; }}
+  tr:last-child td {{ border-bottom:none; }}
+
+  input, select {{ padding:.5rem .6rem; border-radius:.5rem; border:1px solid #332844;
+           background:var(--bg-soft); color:var(--txt); font-size:.88rem; }}
+  input::placeholder {{ color:#5f5670; }}
+  button {{ padding:.5rem .95rem; border-radius:.5rem; border:none; cursor:pointer;
+            background:var(--accent); color:#fff; font-weight:600; font-size:.85rem;
+            transition:filter .12s; }}
+  button:hover {{ filter:brightness(1.12); }}
+  button.danger {{ background:var(--err); }}
   button.ghost {{ background:transparent; border:1px solid var(--brd); color:var(--txt); }}
-  a {{ color:var(--accent); }}
-  .dot {{ display:inline-block; width:.5rem; height:.5rem; border-radius:50%; margin-right:.35rem; }}
-  .dot.ok {{ background:var(--ok); }}
-  .dot.off {{ background:var(--off); }}
+  button.ghost:hover {{ background:var(--card-hover); }}
+  button.sm {{ font-size:.75rem; padding:.25rem .55rem; }}
+  .btn-link {{ display:inline-block; padding:.5rem .95rem; border-radius:.5rem;
+               background:var(--accent); color:#fff; font-weight:600; font-size:.85rem; }}
+
+  .dot {{ display:inline-block; width:.5rem; height:.5rem; border-radius:50%;
+          margin-right:.4rem; background:var(--off); }}
+  .dot.ok {{ background:var(--ok); box-shadow:0 0 6px rgba(52,211,153,.6); }}
   .dot.warn {{ background:var(--warn); }}
-  code {{ background:#120c1c; padding:.15rem .4rem; border-radius:.3rem; font-size:.8rem; }}
+  .dot.err {{ background:var(--err); }}
+  .badge {{ display:inline-block; font-size:.72rem; padding:.1rem .45rem; border-radius:1rem;
+            background:var(--card-hover); color:var(--dim); margin-left:.3rem; }}
+
+  code {{ background:var(--bg-soft); padding:.15rem .4rem; border-radius:.35rem;
+          font-size:.78rem; }}
   form.inline {{ display:inline; }}
-  nav a {{ margin-right:1rem; }}
+  .row-actions {{ display:flex; flex-wrap:wrap; gap:.3rem; }}
+  .muted {{ color:var(--dim); }}
+  .name {{ color:var(--dim); font-size:.8rem; }}
+  .status-label {{ font-size:.76rem; color:var(--dim); margin-top:.15rem; }}
+
+  form.create {{ display:flex; gap:.55rem; flex-wrap:wrap; align-items:center;
+                 margin-bottom:.3rem; }}
+  form.create input, form.create select {{ flex:1; min-width:9rem; }}
+
+  footer.admin-footer {{ margin-top:2.5rem; }}
+
+  @media (max-width:640px) {{
+    table, thead, tbody, tr {{ display:block; }}
+    th {{ display:none; }}
+    tr {{ border:1px solid var(--brd); border-radius:.6rem; padding:.6rem; margin-bottom:.6rem; }}
+    td {{ border:none; padding:.25rem 0; }}
+    td::before {{ content: attr(data-label); display:block; color:var(--dim); font-size:.72rem;
+                  text-transform:uppercase; letter-spacing:.03em; margin-bottom:.1rem; }}
+  }}
 </style>
 <main>
-  <nav><a href="/admin">Usuários</a><a href="/admin/drives">Contas Drive</a></nav>
+  <div class="topbar">
+    <div class="brand">🎬 Stream Helium <span>· admin</span></div>
+    <nav>{nav}</nav>
+  </div>
   {body}
+  <footer class="admin-footer">
+    <form method="post" action="/admin/logout">
+      <button type="submit" class="ghost">Sair</button>
+    </form>
+  </footer>
 </main>
 """
     return Response(html, mimetype="text/html; charset=utf-8")
@@ -98,12 +189,17 @@ def admin_login():
 <title>Login - Admin</title>
 <style>
   body {{ margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
-          background:#0a0710; color:#ece8f4; font:15px/1.6 system-ui,sans-serif; }}
-  input {{ padding:.5rem; border-radius:.4rem; border:1px solid #332844; background:#120c1c; color:#ece8f4; }}
-  button {{ padding:.5rem 1rem; border-radius:.4rem; border:none; cursor:pointer; background:#8b5cf6; color:#fff; font-weight:600; }}
+          background:radial-gradient(60% 50% at 50% 0%, rgba(139,92,246,.22), transparent 65%) #0a0710;
+          color:#ece8f4; font:15px/1.6 system-ui,sans-serif; }}
+  .box {{ text-align:center; }}
+  h1 {{ font-size:1.2rem; }}
+  input {{ padding:.6rem .7rem; border-radius:.5rem; border:1px solid #332844;
+           background:#120c1c; color:#ece8f4; width:16rem; }}
+  button {{ padding:.6rem 1.1rem; border-radius:.5rem; border:none; cursor:pointer;
+            background:#8b5cf6; color:#fff; font-weight:600; margin-left:.4rem; }}
 </style>
-<div>
-  <h1>Entrar</h1>
+<div class="box">
+  <h1>🎬 Stream Helium · admin</h1>
   {error}
   <form method="post">
     <input type="password" name="password" placeholder="Senha do admin" autofocus>
@@ -120,6 +216,20 @@ def admin_logout():
     return redirect("/admin/login")
 
 
+def _stat_cards(overview):
+    fam, drv, tmdb, dev = overview["family"], overview["drives"], overview["tmdb"], overview["devices"]
+    return f"""
+    <div class="stats">
+      <div class="stat"><div class="n">{fam['total']}</div><div class="l">Contas de família</div></div>
+      <div class="stat ok"><div class="n">{fam['active_count']}</div><div class="l">Ativas</div></div>
+      <div class="stat warn"><div class="n">{fam['expired_count']}</div><div class="l">Expiradas</div></div>
+      <div class="stat"><div class="n">{drv['connected']}/{drv['total']}</div><div class="l">Drives conectados</div></div>
+      <div class="stat"><div class="n">{tmdb['active_count']}/{tmdb['total']}</div><div class="l">Chaves TMDB ativas</div></div>
+      <div class="stat"><div class="n">{dev['total']}</div><div class="l">Dispositivos ativos (4h)</div></div>
+    </div>
+    """
+
+
 # --- family/viewer accounts -------------------------------------------
 
 @app.route("/admin")
@@ -127,59 +237,90 @@ def admin_logout():
 def admin_home():
     users = db.list_users()
     drive_accounts = db.list_drive_accounts()
+    overview = db.get_admin_overview()
     connected_drives = [d for d in drive_accounts if d["active"] and d["connected"]]
     drive_options = "\n".join(
         f'<option value="{d["id"]}">{escape(d["label"])}</option>' for d in connected_drives
     )
     rows = "\n".join(_user_row(u, connected_drives) for u in users) or (
-        '<tr><td colspan="7" style="color:var(--dim)">Nenhuma conta ainda.</td></tr>'
+        '<tr><td colspan="6" class="muted">Nenhuma conta ainda.</td></tr>'
     )
 
     if not drive_accounts:
         drive_warning = (
-            '<p style="color:var(--warn)">Nenhuma conta Drive no pool ainda - '
+            '<p class="lede" style="color:var(--warn)">⚠️ Nenhuma conta Drive no pool ainda - '
             'cadastre uma em <a href="/admin/drives">Contas Drive</a> antes de '
-            'criar contas de família, senão elas ficam sem addon funcional.</p>'
+            'criar contas de família.</p>'
         )
     else:
         drive_warning = ""
 
     return _page(f"""
-      <h1>Contas de família</h1>
+      <h1>Painel</h1>
+      <p class="lede">Visão geral do sistema e gestão das contas de família.</p>
+      {_stat_cards(overview)}
+
+      <h2>Contas de família</h2>
       {drive_warning}
-      <form method="post" action="/admin/users" style="display:flex;gap:.5rem;margin:1rem 0;flex-wrap:wrap">
-        <input type="email" name="email" placeholder="email@exemplo.com" required style="flex:1;min-width:12rem">
-        <input type="text" name="display_name" placeholder="Nome (opcional)" style="flex:1;min-width:8rem">
-        <input type="number" name="expires_in_days" placeholder="Expira em (dias, opcional)" min="1" style="width:11rem">
-        <select name="drive_account_id">
-          <option value="">Automático (equilibrar)</option>
-          {drive_options}
-        </select>
-        <button type="submit">Adicionar</button>
-      </form>
-      <table>
-        <tr><th>Conta</th><th>Drive atribuído</th><th>TMDB</th><th>Senha</th><th>Expira</th><th>Convite</th><th></th></tr>
-        {rows}
-      </table>
-      <form method="post" action="/admin/logout" style="margin-top:2rem">
-        <button type="submit" class="ghost">Sair</button>
-      </form>
-    """)
+      <div class="panel">
+        <form class="create" method="post" action="/admin/users">
+          <input type="email" name="email" placeholder="email@exemplo.com" required>
+          <input type="text" name="display_name" placeholder="Nome (opcional)">
+          <input type="number" name="expires_in_days" placeholder="Expira em (dias)" min="1">
+          <select name="drive_account_id">
+            <option value="">Automático (equilibrar)</option>
+            {drive_options}
+          </select>
+          <button type="submit">Adicionar</button>
+        </form>
+      </div>
+      <div class="panel">
+        <table>
+          <tr><th>Conta</th><th>Drive</th><th>Dispositivo</th><th>Senha</th><th>Expira</th><th>Convite / Ações</th></tr>
+          {rows}
+        </table>
+      </div>
+    """, active="users")
 
 
 def _format_expiry(expires_at):
     if not expires_at:
-        return '<span style="color:var(--dim)">sem prazo</span>', False
+        return '<span class="muted">sem prazo</span>', False
     expired = expires_at <= datetime.now(timezone.utc)
     label = expires_at.strftime("%d/%m/%Y")
     if expired:
-        return f'<span style="color:#ef4444">expirou em {label}</span>', True
-    return label, False
+        return f'<span style="color:var(--err)">expirou {label}</span>', True
+    days_left = (expires_at - datetime.now(timezone.utc)).days
+    color = "var(--warn)" if days_left <= 3 else "var(--txt)"
+    return f'<span style="color:{color}">{label} <span class="muted">({days_left}d)</span></span>', False
+
+
+def _format_device(user_id):
+    try:
+        session_row = db.get_device_session(user_id)
+    except Exception:
+        session_row = None
+    if not session_row:
+        return '<span class="dot"></span><span class="muted">nenhum</span>'
+
+    age_minutes = (datetime.now(timezone.utc) - session_row["last_seen"]).total_seconds() / 60
+    ttl = int(os.environ.get("DEVICE_SESSION_TTL_MINUTES", "240"))
+    if age_minutes >= ttl:
+        return '<span class="dot"></span><span class="muted">livre (inativo)</span>'
+
+    label = escape((session_row.get("device_label") or "dispositivo")[:40])
+    seen = "agora" if age_minutes < 1 else f"há {int(age_minutes)}min"
+    return (
+        f'<span class="dot ok"></span>{label}<br>'
+        f'<span class="status-label">visto {seen}</span><br>'
+        f'<form class="inline" method="post" action="/admin/users/{user_id}/free-device" style="margin-top:.2rem">'
+        f'<button type="submit" class="ghost sm">Liberar</button></form>'
+    )
 
 
 def _user_row(u, connected_drives):
     is_active = db.is_effectively_active(u)
-    status_dot = "ok" if is_active else "off"
+    status_dot = "ok" if is_active else ""
     expiry_html, is_expired = _format_expiry(u.get("expires_at"))
     if not u["active"]:
         status_label = "desativado"
@@ -189,13 +330,12 @@ def _user_row(u, connected_drives):
     else:
         status_label = "ativo"
 
-    tmdb = "sim" if u["tmdb_connected"] else "—"
     senha = "definida" if u.get("has_password") else "—"
     invite_url = f"/connect/{u['invite_token']}"
     name = escape(u["display_name"] or "")
     toggle_label = "Desativar" if u["active"] else "Ativar"
-    pin_note = ' 📌' if u.get("drive_account_pinned") else ""
-    drive_label = escape(u.get("drive_label") or "—") + pin_note
+    pin_badge = ' <span class="badge">📌 fixado</span>' if u.get("drive_account_pinned") else ""
+    drive_label = escape(u.get("drive_label") or "—")
 
     current_drive_id = str(u.get("drive_account_id") or "")
     reassign_options = "\n".join(
@@ -205,43 +345,49 @@ def _user_row(u, connected_drives):
     )
     auto_button = (
         f'<form class="inline" method="post" action="/admin/users/{u["id"]}/auto-assign">'
-        f'<button type="submit" class="ghost" title="Volta a ser rebalanceado automaticamente">Auto</button>'
+        f'<button type="submit" class="ghost sm" title="Volta a ser rebalanceado automaticamente">Auto</button>'
         f'</form>'
         if u.get("drive_account_pinned") else ""
+    )
+    reset_password_btn = (
+        f'<form class="inline" method="post" action="/admin/users/{u["id"]}/reset-password" '
+        f'onsubmit="return confirm(\'Resetar a senha? A pessoa precisa definir uma nova pelo link de convite.\')">'
+        f'<button type="submit" class="ghost sm">Resetar</button></form>'
+        if u.get("has_password") else ""
     )
 
     return f"""
     <tr>
-      <td><span class="dot {status_dot}"></span>{escape(u['email'])}
-          {f'<br><span style="color:var(--dim);font-size:.8rem">{name}</span>' if name else ''}
-          <br><span style="color:var(--dim);font-size:.75rem">{status_label}</span></td>
-      <td>{drive_label}
-        <form class="inline" method="post" action="/admin/users/{u['id']}/reassign" style="display:block;margin-top:.3rem">
-          <select name="drive_account_id" style="font-size:.8rem;padding:.2rem">
+      <td data-label="Conta"><span class="dot {status_dot}"></span>{escape(u['email'])}
+          {f'<div class="name">{name}</div>' if name else ''}
+          <div class="status-label">{status_label}</div></td>
+      <td data-label="Drive">{drive_label}{pin_badge}
+        <form class="inline" method="post" action="/admin/users/{u['id']}/reassign" style="display:block;margin-top:.35rem">
+          <select name="drive_account_id" style="font-size:.78rem;padding:.25rem">
             {reassign_options}
           </select>
-          <button type="submit" class="ghost" style="font-size:.8rem;padding:.2rem .5rem" title="Fixa nessa conta">Fixar</button>
+          <button type="submit" class="ghost sm" title="Fixa nessa conta">Fixar</button>
         </form>
         {auto_button}
       </td>
-      <td>{tmdb}</td>
-      <td>{senha}
-        {'<form class="inline" method="post" action="/admin/users/' + str(u['id']) + '/reset-password" onsubmit="return confirm(\'Resetar a senha? A pessoa precisa definir uma nova pelo link de convite.\')"><button type="submit" class="ghost" style="font-size:.75rem;padding:.2rem .4rem">Resetar</button></form>' if u.get('has_password') else ''}
-      </td>
-      <td>{expiry_html}</td>
-      <td><a href="{invite_url}" target="_blank"><code>{invite_url}</code></a></td>
-      <td style="white-space:nowrap">
-        <form class="inline" method="post" action="/admin/users/{u['id']}/renew">
-          <input type="hidden" name="days" value="30">
-          <button type="submit" class="ghost" title="Renovar por mais 30 dias">+30d</button>
-        </form>
-        <form class="inline" method="post" action="/admin/users/{u['id']}/toggle">
-          <button type="submit" class="ghost">{toggle_label}</button>
-        </form>
-        <form class="inline" method="post" action="/admin/users/{u['id']}/delete"
-              onsubmit="return confirm('Remover {escape(u['email'])}? A URL do addon dele para de funcionar imediatamente.')">
-          <button type="submit" class="danger">Remover</button>
-        </form>
+      <td data-label="Dispositivo">{_format_device(str(u['id']))}</td>
+      <td data-label="Senha">{senha}<br>{reset_password_btn}</td>
+      <td data-label="Expira">{expiry_html}</td>
+      <td data-label="Convite / Ações">
+        <a href="{invite_url}" target="_blank"><code>{invite_url}</code></a>
+        <div class="row-actions" style="margin-top:.4rem">
+          <form class="inline" method="post" action="/admin/users/{u['id']}/renew">
+            <input type="hidden" name="days" value="30">
+            <button type="submit" class="ghost sm" title="Renovar por mais 30 dias">+30d</button>
+          </form>
+          <form class="inline" method="post" action="/admin/users/{u['id']}/toggle">
+            <button type="submit" class="ghost sm">{toggle_label}</button>
+          </form>
+          <form class="inline" method="post" action="/admin/users/{u['id']}/delete"
+                onsubmit="return confirm('Remover {escape(u['email'])}? A URL do addon dele para de funcionar imediatamente.')">
+            <button type="submit" class="danger sm">Remover</button>
+          </form>
+        </div>
       </td>
     </tr>
     """
@@ -301,10 +447,7 @@ def admin_renew_user(uid):
 @app.route("/admin/users/<uid>/reassign", methods=["POST"])
 @require_admin
 def admin_reassign_user(uid):
-    """Pins this family account to a specific pool account. Once pinned,
-    the account won't move even if you later delete/add other pool
-    accounts - i.e. everything except deleting THIS SPECIFIC pool account,
-    which leaves nothing to pin to."""
+    """Pins this family account to a specific pool account."""
     from sgd.tenancy import _drive_cache
     user_row = db.get_user(uid)
     if not user_row:
@@ -320,8 +463,6 @@ def admin_reassign_user(uid):
 @app.route("/admin/users/<uid>/auto-assign", methods=["POST"])
 @require_admin
 def admin_auto_assign_user(uid):
-    """Un-pins this family account and immediately rebalances it to
-    whichever pool account currently has the fewest people."""
     user_row = db.get_user(uid)
     if not user_row:
         abort(404)
@@ -340,6 +481,13 @@ def admin_reset_password(uid):
     return redirect("/admin")
 
 
+@app.route("/admin/users/<uid>/free-device", methods=["POST"])
+@require_admin
+def admin_free_device(uid):
+    db.clear_device_session(uid)
+    return redirect("/admin")
+
+
 @app.route("/admin/users/<uid>/delete", methods=["POST"])
 @require_admin
 def admin_delete_user(uid):
@@ -354,29 +502,33 @@ def admin_delete_user(uid):
 def admin_drives():
     drive_accounts = db.list_drive_accounts()
     rows = "\n".join(_drive_row(d) for d in drive_accounts) or (
-        '<tr><td colspan="4" style="color:var(--dim)">Nenhuma conta Drive ainda.</td></tr>'
+        '<tr><td colspan="4" class="muted">Nenhuma conta Drive ainda.</td></tr>'
     )
 
     return _page(f"""
-      <h1>Contas Drive (pool)</h1>
-      <p style="color:var(--dim)">Todas devem apontar pra mesma pasta compartilhada.
-      Novas contas de família são atribuídas automaticamente a quem tiver menos gente.</p>
-      <form method="post" action="/admin/drives" style="display:flex;gap:.5rem;margin:1rem 0">
-        <input type="text" name="label" placeholder="Nome (ex: Drive 1)" required style="flex:1">
-        <button type="submit">Adicionar</button>
-      </form>
-      <table>
-        <tr><th>Conta</th><th>Status</th><th>Famílias atribuídas</th><th></th></tr>
-        {rows}
-      </table>
-    """, title="Contas Drive - Admin")
+      <h1>Contas Drive</h1>
+      <p class="lede">Todas devem apontar pra mesma pasta compartilhada. Novas
+      contas de família são atribuídas automaticamente a quem tiver menos gente.</p>
+      <div class="panel">
+        <form class="create" method="post" action="/admin/drives">
+          <input type="text" name="label" placeholder="Nome (ex: Drive 1)" required>
+          <button type="submit">Adicionar</button>
+        </form>
+      </div>
+      <div class="panel">
+        <table>
+          <tr><th>Conta</th><th>Status</th><th>Famílias</th><th>Ações</th></tr>
+          {rows}
+        </table>
+      </div>
+    """, title="Contas Drive - Admin", active="drives")
 
 
 def _drive_row(d):
     if not d["connected"]:
         status = '<span class="dot warn"></span>não conectado'
     elif not d["active"]:
-        status = '<span class="dot off"></span>desativado'
+        status = '<span class="dot"></span>desativado'
     else:
         status = '<span class="dot ok"></span>conectado'
 
@@ -385,19 +537,20 @@ def _drive_row(d):
 
     return f"""
     <tr>
-      <td>{escape(d['label'])}</td>
-      <td>{status}</td>
-      <td>{d['assigned_count']}</td>
-      <td style="white-space:nowrap">
-        <a href="/admin/drives/{d['id']}/connect-google" style="display:inline-block;padding:.5rem 1rem;
-           border-radius:.4rem;background:var(--accent);color:#fff;text-decoration:none;margin-right:.3rem">{connect_label}</a>
-        <form class="inline" method="post" action="/admin/drives/{d['id']}/toggle">
-          <button type="submit" class="ghost">{toggle_label}</button>
-        </form>
-        <form class="inline" method="post" action="/admin/drives/{d['id']}/delete"
-              onsubmit="return confirm('Remover {escape(d['label'])}? As {d['assigned_count']} famílias nela serão redistribuídas automaticamente entre as demais contas do pool.')">
-          <button type="submit" class="danger">Remover</button>
-        </form>
+      <td data-label="Conta">{escape(d['label'])}</td>
+      <td data-label="Status">{status}</td>
+      <td data-label="Famílias">{d['assigned_count']}</td>
+      <td data-label="Ações">
+        <div class="row-actions">
+          <a href="/admin/drives/{d['id']}/connect-google" class="btn-link">{connect_label}</a>
+          <form class="inline" method="post" action="/admin/drives/{d['id']}/toggle">
+            <button type="submit" class="ghost sm">{toggle_label}</button>
+          </form>
+          <form class="inline" method="post" action="/admin/drives/{d['id']}/delete"
+                onsubmit="return confirm('Remover {escape(d['label'])}? As {d['assigned_count']} famílias nela serão redistribuídas automaticamente entre as demais contas do pool.')">
+            <button type="submit" class="danger sm">Remover</button>
+          </form>
+        </div>
       </td>
     </tr>
     """
@@ -430,3 +583,96 @@ def admin_delete_drive(did):
     db.redistribute_and_delete_drive_account(did)
     _drive_cache.pop(str(did), None)
     return redirect("/admin/drives")
+
+
+# --- TMDB key pool --------------------------------------------------------
+
+def _mask_key(plain_or_none):
+    if not plain_or_none:
+        return "—"
+    if len(plain_or_none) <= 4:
+        return "•" * len(plain_or_none)
+    return "•" * (len(plain_or_none) - 4) + plain_or_none[-4:]
+
+
+@app.route("/admin/tmdb")
+@require_admin
+def admin_tmdb():
+    from sgd.crypto import decrypt
+    keys = db.list_tmdb_keys()
+    rows = "\n".join(_tmdb_row(k, decrypt(k["api_key"])) for k in keys) or (
+        '<tr><td colspan="3" class="muted">Nenhuma chave TMDB ainda.</td></tr>'
+    )
+
+    return _page(f"""
+      <h1>Chaves TMDB</h1>
+      <p class="lede">Usadas pra resolver título/ano/pt-BR dos streams. Cadastre
+      mais de uma pra dividir o limite de requisições da TMDB entre elas - a
+      escolha por chamada é aleatória entre as ativas.</p>
+      <div class="panel">
+        <form class="create" method="post" action="/admin/tmdb">
+          <input type="text" name="label" placeholder="Nome (ex: Chave 1)" required>
+          <input type="text" name="api_key" placeholder="Chave da API TMDB" required>
+          <button type="submit">Adicionar</button>
+        </form>
+      </div>
+      <div class="panel">
+        <table>
+          <tr><th>Nome</th><th>Chave</th><th>Ações</th></tr>
+          {rows}
+        </table>
+      </div>
+      <p class="lede">Pegue sua chave em
+      <a href="https://www.themoviedb.org/settings/api" target="_blank">themoviedb.org/settings/api</a>.</p>
+    """, title="Chaves TMDB - Admin", active="tmdb")
+
+
+def _tmdb_row(k, plain_key):
+    status = '<span class="dot ok"></span>ativa' if k["active"] else '<span class="dot"></span>desativada'
+    toggle_label = "Desativar" if k["active"] else "Ativar"
+
+    return f"""
+    <tr>
+      <td data-label="Nome">{escape(k['label'])}<div class="status-label">{status}</div></td>
+      <td data-label="Chave"><code>{escape(_mask_key(plain_key))}</code></td>
+      <td data-label="Ações">
+        <div class="row-actions">
+          <form class="inline" method="post" action="/admin/tmdb/{k['id']}/toggle">
+            <button type="submit" class="ghost sm">{toggle_label}</button>
+          </form>
+          <form class="inline" method="post" action="/admin/tmdb/{k['id']}/delete"
+                onsubmit="return confirm('Remover a chave {escape(k['label'])}?')">
+            <button type="submit" class="danger sm">Remover</button>
+          </form>
+        </div>
+      </td>
+    </tr>
+    """
+
+
+@app.route("/admin/tmdb", methods=["POST"])
+@require_admin
+def admin_create_tmdb():
+    label = (request.form.get("label") or "").strip()
+    api_key = (request.form.get("api_key") or "").strip()
+    if not label or not api_key:
+        abort(400)
+    db.create_tmdb_key(label, api_key)
+    return redirect("/admin/tmdb")
+
+
+@app.route("/admin/tmdb/<tid>/toggle", methods=["POST"])
+@require_admin
+def admin_toggle_tmdb(tid):
+    key_row = db.get_tmdb_key(tid)
+    if not key_row:
+        abort(404)
+    db.set_tmdb_key_active(tid, not key_row["active"])
+    return redirect("/admin/tmdb")
+
+
+@app.route("/admin/tmdb/<tid>/delete", methods=["POST"])
+@require_admin
+def admin_delete_tmdb(tid):
+    db.delete_tmdb_key(tid)
+    return redirect("/admin/tmdb")

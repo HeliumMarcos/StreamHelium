@@ -130,7 +130,8 @@ def test_user_health_reports_config_and_drive(client, monkeypatch):
     class FakeGoogleDrive:
         drive_instance = FakeDriveInstance()
 
-    _patch_tenant(monkeypatch, gdrive=FakeGoogleDrive(), tmdb_api_key="key")
+    _patch_tenant(monkeypatch, gdrive=FakeGoogleDrive())
+    monkeypatch.setattr("sgd.db.has_active_tmdb_key", lambda: True)
 
     resp = client.get(
         f"/u/{TEST_USER_ID}/health", base_url="http://addon.example.com"

@@ -44,7 +44,7 @@ def test_admin_home_lists_users(client, monkeypatch):
             "drive_account_id": "22222222-2222-2222-2222-222222222222",
             "drive_label": "Drive 1",
             "expires_at": None,
-            "tmdb_connected": False,
+            "has_password": False,
         }],
     )
     monkeypatch.setattr("sgd.db.list_drive_accounts", lambda: [{
@@ -54,6 +54,13 @@ def test_admin_home_lists_users(client, monkeypatch):
         "connected": True,
         "assigned_count": 1,
     }])
+    monkeypatch.setattr("sgd.db.get_admin_overview", lambda: {
+        "family": {"total": 1, "active_count": 1, "expired_count": 0, "disabled_count": 0},
+        "drives": {"total": 1, "connected": 1},
+        "tmdb": {"total": 0, "active_count": 0},
+        "devices": {"total": 0},
+    })
+    monkeypatch.setattr("sgd.db.get_device_session", lambda uid: None)
     _login(client)
 
     resp = client.get("/admin")

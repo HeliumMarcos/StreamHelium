@@ -153,12 +153,10 @@ def _require_invited_user(invite_token):
 
 @app.route("/connect/<invite_token>")
 def connect_landing(invite_token):
-    """Welcome page for a family account: no Google connection needed here
-    (that's admin-only, done once per pool account) - just an optional own
-    TMDB key and a link to the install instructions."""
+    """Welcome page for a family account: no Google connection and no TMDB
+    key needed here - both are admin-managed pools now. Just password setup
+    and a link to the install instructions."""
     user_row = _require_invited_user(invite_token)
-    tmdb_connected = user_row["tmdb_api_key"] is not None
-    tmdb_note = "Chave salva." if tmdb_connected else "Opcional - melhora títulos em pt-BR."
     has_password = bool(user_row.get("password_hash"))
     password_error = request.args.get("password_error")
 
@@ -195,19 +193,6 @@ def connect_landing(invite_token):
               background:#8b5cf6;color:#fff;text-decoration:none">Ver instruções de instalação</a>
     <hr style="border-color:#221a33;margin:1.5rem 0">
     {password_block}
-    <hr style="border-color:#221a33;margin:1.5rem 0">
-    <form method="post" action="/connect/{invite_token}/tmdb"
-          style="display:flex;gap:.5rem;justify-content:center">
-      <input type="text" name="tmdb_api_key" placeholder="Sua chave TMDB (opcional)"
-             style="flex:1;padding:.5rem;border-radius:.4rem;border:1px solid #332844;
-                    background:#120c1c;color:#ece8f4">
-      <button type="submit" style="padding:.5rem 1rem;border-radius:.4rem;border:none;
-              background:#22d3ee;color:#0a0710;font-weight:600">Salvar</button>
-    </form>
-    <p style="color:#a79fbb;font-size:.85rem">{tmdb_note}
-      Obtenha a sua em
-      <a href="https://www.themoviedb.org/settings/api" style="color:#8b5cf6">themoviedb.org</a>.
-    </p>
   </div>
 </div>
 """
@@ -231,14 +216,6 @@ def _password_form(invite_token, password_error):
               background:#8b5cf6;color:#fff;font-weight:600">Salvar senha</button>
     </form>
 """
-
-
-@app.route("/connect/<invite_token>/tmdb", methods=["POST"])
-def connect_tmdb(invite_token):
-    user_row = _require_invited_user(invite_token)
-    tmdb_api_key = (request.form.get("tmdb_api_key") or "").strip() or None
-    db.save_tmdb_key(user_row["id"], tmdb_api_key)
-    return redirect(f"/connect/{invite_token}")
 
 
 def _result_page(ok, title, message, link=None, link_label=None):

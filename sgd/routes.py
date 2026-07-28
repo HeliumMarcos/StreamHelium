@@ -1,7 +1,8 @@
 import os
 import re
+import hashlib
 import logging
-from sgd import app, home
+from sgd import app, home, db
 from sgd import tenancy
 from sgd.meta import MetadataNotFound, Meta
 from sgd.streams import Streams
@@ -11,6 +12,11 @@ from flask import g, jsonify, abort, Response, redirect, request
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+# How long a device stays "the active one" for a family account without any
+# new stream request from it - after this, a different device is free to
+# take over. Renewed on every stream request from the same device.
+DEVICE_SESSION_TTL_MINUTES = int(os.environ.get("DEVICE_SESSION_TTL_MINUTES", "240"))
 
 # tt1234567 for IMDb ids, or tmdb:1234 for TMDB ids, optionally followed by
 # :<season>:<episode> for series.
@@ -71,6 +77,40 @@ def manifest_url(user_id):
     """Vercel terminates TLS in front of the app, so request.url_root comes
     through as http:// - force https so the link we hand to Stremio works."""
     return f"https://{request.host}/u/{user_id}/manifest.json"
+
+
+def _tmdb_pool_has_key():
+    try:
+        return db.has_active_tmdb_key()
+    except Exception as e:
+        logger.warning("Could not check TMDB key pool: %s", e)
+        return False
+
+
+def _device_fingerprint(req):
+    """Best-effort device signature. Stremio's HTTP API doesn't send any
+    real device/install ID, so this is User-Agent + client IP - not exact
+    (e.g. two different phones on the same home Wi-Fi with the same
+    Stremio version could collide), but it's the closest available signal
+    without changing the Stremio client itself."""
+    ua = req.headers.get("User-Agent", "")
+    ip = req.headers.get("X-Forwarded-For", req.remote_addr or "")
+    ip = ip.split(",")[0].strip()
+    return hashlib.sha256(f"{ua}|{ip}".encode()).hexdigest()[:16]
+
+
+def _check_device_limit(user_id, req):
+    fingerprint = _device_fingerprint(req)
+    device_label = (req.headers.get("User-Agent") or "dispositivo desconhecido")[:120]
+    try:
+        return db.touch_device_session(
+            user_id, fingerprint, device_label, DEVICE_SESSION_TTL_MINUTES
+        )
+    except Exception as e:
+        # Fail open: a DB hiccup on the device check shouldn't take down
+        # playback for everyone.
+        logger.warning("Device session check failed, allowing request: %s", e)
+        return True
 
 
 @app.before_request
@@ -164,7 +204,7 @@ def user_health(user_id):
             "manifest": manifest_url(user_id),
         },
         "drive": status,
-        "config": {"tmdb": bool(g.tmdb_api_key)},
+        "config": {"tmdb": _tmdb_pool_has_key()},
     }
     resp = jsonify(payload)
     resp.status_code = 200 if status.get("connected") else 503
@@ -186,7 +226,7 @@ def user_landing(user_id):
         manifest=manifest_for(g.user),
         manifest_url=manifest_url(user_id),
         stremio_url=f"stremio://{request.host}/u/{user_id}/manifest.json",
-        tmdb_enabled=bool(g.tmdb_api_key),
+        tmdb_enabled=_tmdb_pool_has_key(),
         proxy_enabled=bool(os.environ.get("CF_PROXY_URL")),
         health_url=f"/u/{user_id}/health",
         connect_url=f"/connect/{g.user['invite_token']}" if g.user.get("invite_token") else None,
@@ -210,6 +250,12 @@ def addon_stream(user_id, stream_type, stream_id):
 
     if invalid_stream_type or invalid_id:
         abort(404)
+
+    if not _check_device_limit(user_id, request):
+        logger.info("Blocked stream request for user %s - device limit reached", user_id)
+        resp = jsonify({"streams": []})
+        return common_headers(resp)
+
     try:
         resp = Response(
             response=get_streams(g.gdrive, stream_type, stream_id),

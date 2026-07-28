@@ -97,6 +97,30 @@ def init_schema():
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT;"
         )
 
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tmdb_keys (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                label TEXT NOT NULL,
+                api_key TEXT NOT NULL,
+                active BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            );
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS device_sessions (
+                user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                fingerprint TEXT NOT NULL,
+                device_label TEXT,
+                started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                last_seen TIMESTAMPTZ NOT NULL DEFAULT now()
+            );
+            """
+        )
+
 
 def _is_expired(user_row: dict) -> bool:
     expires_at = user_row.get("expires_at")
@@ -363,6 +387,9 @@ def delete_user(user_id: str) -> None:
 
 
 def save_tmdb_key(user_id: str, tmdb_api_key: str | None) -> None:
+    """Deprecated: TMDB keys are now admin-managed in the tmdb_keys pool,
+    not per family account. Kept only so old rows with a value already set
+    don't error on read; do not call this for new writes."""
     with get_conn() as conn:
         conn.execute(
             "UPDATE users SET tmdb_api_key = %s WHERE id = %s",
@@ -370,5 +397,143 @@ def save_tmdb_key(user_id: str, tmdb_api_key: str | None) -> None:
         )
 
 
-def decrypted_tmdb_key(user_row: dict) -> str | None:
-    return decrypt(user_row.get("tmdb_api_key"))
+# --- tmdb_keys (pool, admin-managed) ---------------------------------------
+
+def create_tmdb_key(label: str, api_key: str) -> dict:
+    with get_conn() as conn:
+        return conn.execute(
+            """
+            INSERT INTO tmdb_keys (label, api_key)
+            VALUES (%s, %s)
+            RETURNING id, label, active, created_at
+            """,
+            (label, encrypt(api_key)),
+        ).fetchone()
+
+
+def list_tmdb_keys() -> list[dict]:
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT id, label, active, created_at, api_key FROM tmdb_keys "
+            "ORDER BY created_at ASC"
+        ).fetchall()
+
+
+def get_tmdb_key(tmdb_key_id: str) -> dict | None:
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM tmdb_keys WHERE id = %s", (tmdb_key_id,)
+        ).fetchone()
+
+
+def set_tmdb_key_active(tmdb_key_id: str, active: bool) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE tmdb_keys SET active = %s WHERE id = %s", (active, tmdb_key_id)
+        )
+
+
+def delete_tmdb_key(tmdb_key_id: str) -> None:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM tmdb_keys WHERE id = %s", (tmdb_key_id,))
+
+
+def list_active_tmdb_keys_decrypted() -> list[str]:
+    """Used by sgd/meta.py to pick a key per request - returns plain values,
+    not rows, since that's all the caller needs and it avoids leaking
+    ciphertext/ids into a hot path."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT api_key FROM tmdb_keys WHERE active = TRUE"
+        ).fetchall()
+    return [decrypt(r["api_key"]) for r in rows if r["api_key"]]
+
+
+def has_active_tmdb_key() -> bool:
+    """Cheap existence check for status pages - doesn't decrypt anything."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM tmdb_keys WHERE active = TRUE LIMIT 1"
+        ).fetchone()
+    return row is not None
+
+
+# --- device_sessions (one active device per family account) ---------------
+
+def touch_device_session(
+    user_id: str, fingerprint: str, device_label: str, ttl_minutes: int
+) -> bool:
+    """Registers this request's device as the active one for this family
+    account, UNLESS a different device is already active and within its TTL
+    - in which case this call is rejected (returns False) and nothing is
+    written. The device fingerprint is a best-effort signature (see
+    routes.py) - there's no real device ID available from Stremio's HTTP
+    API, so this is approximate, not cryptographically exact."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT fingerprint, last_seen FROM device_sessions "
+            "WHERE user_id = %s FOR UPDATE",
+            (user_id,),
+        ).fetchone()
+        now = datetime.now(timezone.utc)
+
+        if row and row["fingerprint"] != fingerprint:
+            age_minutes = (now - row["last_seen"]).total_seconds() / 60
+            if age_minutes < ttl_minutes:
+                return False
+
+        conn.execute(
+            """
+            INSERT INTO device_sessions (user_id, fingerprint, device_label, last_seen)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (user_id) DO UPDATE SET
+                fingerprint = EXCLUDED.fingerprint,
+                device_label = EXCLUDED.device_label,
+                last_seen = EXCLUDED.last_seen
+            """,
+            (user_id, fingerprint, device_label, now),
+        )
+        return True
+
+
+def get_device_session(user_id: str) -> dict | None:
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM device_sessions WHERE user_id = %s", (user_id,)
+        ).fetchone()
+
+
+def clear_device_session(user_id: str) -> None:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM device_sessions WHERE user_id = %s", (user_id,))
+
+
+# --- overview stats for the admin dashboard ---------------------------------
+
+def get_admin_overview() -> dict:
+    with get_conn() as conn:
+        family = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE active AND (expires_at IS NULL OR expires_at > now())) AS active_count,
+                COUNT(*) FILTER (WHERE active AND expires_at IS NOT NULL AND expires_at <= now()) AS expired_count,
+                COUNT(*) FILTER (WHERE NOT active) AS disabled_count
+            FROM users
+            """
+        ).fetchone()
+        drives = conn.execute(
+            """
+            SELECT COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE active AND google_refresh_token IS NOT NULL) AS connected
+            FROM drive_accounts
+            """
+        ).fetchone()
+        tmdb = conn.execute(
+            "SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE active) AS active_count FROM tmdb_keys"
+        ).fetchone()
+        devices = conn.execute(
+            "SELECT COUNT(*) AS total FROM device_sessions WHERE last_seen > now() - interval '240 minutes'"
+        ).fetchone()
+
+    return {"family": family, "drives": drives, "tmdb": tmdb, "devices": devices}

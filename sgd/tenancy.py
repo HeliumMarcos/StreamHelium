@@ -85,5 +85,4 @@ def load_tenant(user_id):
 
     g.user = user_row
     g.gdrive = drive
-    g.tmdb_api_key = db.decrypted_tmdb_key(user_row)
     return user_row

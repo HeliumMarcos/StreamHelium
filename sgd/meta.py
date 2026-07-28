@@ -1,6 +1,8 @@
 import os
 import json
 import logging
+import random
+import time
 import lxml
 import cchardet
 import sgd.utils as ut
@@ -15,16 +17,29 @@ logger = logging.getLogger(__name__)
 # response) would stick forever.
 METADATA_CACHE_TTL = timedelta(days=7)
 
+# TMDB keys are admin-managed (see /admin/tmdb), possibly more than one to
+# spread rate-limit load. Cached in-process for a few minutes so a single
+# stream search (which can make several TMDB calls) doesn't hit Postgres
+# once per call - refreshed periodically so a newly added/removed key in
+# the admin panel takes effect without a redeploy.
+_TMDB_POOL_TTL_SECONDS = 300
+_tmdb_pool = {"keys": [], "fetched_at": 0.0}
+
 
 def _tmdb_api_key():
-    """The requesting user's own TMDB key if set (multi-tenant), else the
-    deployment-wide TMDB_API_KEY env var (single-tenant/back-compat)."""
-    try:
-        from flask import g, has_request_context
-        if has_request_context() and getattr(g, "tmdb_api_key", None):
-            return g.tmdb_api_key
-    except RuntimeError:
-        pass
+    """A random key from the admin-managed pool, if any; otherwise the
+    legacy single-key TMDB_API_KEY env var."""
+    now = time.time()
+    if now - _tmdb_pool["fetched_at"] > _TMDB_POOL_TTL_SECONDS:
+        try:
+            from sgd import db
+            _tmdb_pool["keys"] = db.list_active_tmdb_keys_decrypted()
+        except Exception as e:
+            logger.warning("Could not refresh the TMDB key pool: %s", e)
+        _tmdb_pool["fetched_at"] = now
+
+    if _tmdb_pool["keys"]:
+        return random.choice(_tmdb_pool["keys"])
     return os.environ.get("TMDB_API_KEY")
 
 
