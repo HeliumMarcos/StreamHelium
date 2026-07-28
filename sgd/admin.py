@@ -508,7 +508,8 @@ def admin_drives():
     return _page(f"""
       <h1>Contas Drive</h1>
       <p class="lede">Todas devem apontar pra mesma pasta compartilhada. Novas
-      contas de família são atribuídas automaticamente a quem tiver menos gente.</p>
+      contas de família são atribuídas automaticamente a quem tiver menos gente.
+      <a href="/admin/drives/worker-config">Ver configuração do Worker →</a></p>
       <div class="panel">
         <form class="create" method="post" action="/admin/drives">
           <input type="text" name="label" placeholder="Nome (ex: Drive 1)" required>
@@ -554,6 +555,40 @@ def _drive_row(d):
       </td>
     </tr>
     """
+
+
+@app.route("/admin/drives/worker-config")
+@require_admin
+def admin_drives_worker_config():
+    import json as _json
+    from sgd.crypto import decrypt
+
+    client_id = os.environ.get("GOOGLE_CLIENT_ID", "")
+    client_secret = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+    drive_accounts = db.list_drive_accounts()
+
+    config = {}
+    for d in drive_accounts:
+        if not d["connected"]:
+            continue
+        full_row = db.get_drive_account(str(d["id"]))
+        refresh_token = decrypt(full_row.get("google_refresh_token"))
+        config[str(d["id"])] = {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "refresh_token": refresh_token,
+        }
+
+    pretty = escape(_json.dumps(config, indent=2, ensure_ascii=False), quote=False)
+    return _page(f"""
+      <h1>Configuração do Worker</h1>
+      <p class="lede">Cole isso como o secret <code>ACCOUNTS</code> do Worker Cloudflare
+      (Settings → Variables → Add → tipo Secret). Contém segredos - não compartilhe.</p>
+      <div class="panel">
+        <pre style="white-space:pre-wrap;word-break:break-all;font-size:.78rem;color:var(--txt);
+                    background:var(--bg-soft);padding:1rem;border-radius:.5rem">{pretty}</pre>
+      </div>
+    """, title="Config do Worker - Admin", active="drives")
 
 
 @app.route("/admin/drives", methods=["POST"])

@@ -299,6 +299,29 @@ def test_admin_routes_require_login_even_with_valid_data(client, monkeypatch):
     assert resp.headers["Location"] == "/admin/login"
 
 
+def test_admin_drives_worker_config(client, monkeypatch):
+    monkeypatch.setattr("sgd.db.list_drive_accounts", lambda: [
+        {"id": "d1", "label": "Drive 1", "active": True, "connected": True,
+         "assigned_count": 0, "connected_at": None, "created_at": None},
+        {"id": "d2", "label": "Drive 2", "active": True, "connected": False,
+         "assigned_count": 0, "connected_at": None, "created_at": None},
+    ])
+    monkeypatch.setattr(
+        "sgd.db.get_drive_account",
+        lambda did: {"id": did, "google_refresh_token": "encrypted-blob"},
+    )
+    monkeypatch.setattr("sgd.crypto.decrypt", lambda v: "real-refresh-token")
+    _login(client)
+
+    resp = client.get("/admin/drives/worker-config")
+
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "real-refresh-token" in body
+    assert '"d1"' in body
+    assert '"d2"' not in body  # unconnected accounts are skipped
+
+
 def test_admin_drives_require_login(client):
     resp = client.get("/admin/drives")
     assert resp.status_code == 302
