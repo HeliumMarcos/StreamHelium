@@ -384,6 +384,10 @@ class Streams:
         self.constructed["behaviorHints"]["proxyHeaders"] = {
             "request": {"Server": "Stremio"}
         }
+        account_id = getattr(self.gdrive, "account_id", None)
+        if account_id:
+            return f"{self.proxy_url}/proxy/{account_id}/load/{file_id}/{file_name}"
+        # Legacy single-account Worker (no account_id segment).
         return f"{self.proxy_url}/load/{file_id}/{file_name}"
 
     def get_gapi_url(self):

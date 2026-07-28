@@ -185,6 +185,8 @@ def user_landing(user_id):
         stremio_url=f"stremio://{request.host}/u/{user_id}/manifest.json",
         tmdb_enabled=bool(g.tmdb_api_key),
         proxy_enabled=bool(os.environ.get("CF_PROXY_URL")),
+        health_url=f"/u/{user_id}/health",
+        connect_url=f"/connect/{g.user['invite_token']}" if g.user.get("invite_token") else None,
     )
     resp = Response(page, mimetype="text/html; charset=utf-8")
     resp.headers["X-Robots-Tag"] = "noindex"

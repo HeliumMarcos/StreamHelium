@@ -363,7 +363,7 @@ PAGE = Template(
   var sub = document.getElementById("drive-sub");
   var bar = document.getElementById("drive-bar");
 
-  fetch("/health", { headers: { "Accept": "application/json" } })
+  fetch("$health_url", { headers: { "Accept": "application/json" } })
     .then(function (r) { return r.json(); })
     .then(function (d) {
       var drv = d.drive || {};
@@ -371,7 +371,7 @@ PAGE = Template(
         dot.className = "dot err";
         val.textContent = "Sem conexão";
         sub.textContent = "Não foi possível falar com a API do Drive"
-          + (drv.error ? " (" + drv.error + ")" : "") + " — confira o TOKEN.";
+          + (drv.error ? " (" + drv.error + ")" : "") + " — reconecte pelo link de convite.";
         bar.parentNode.style.display = "none";
         return;
       }
@@ -443,7 +443,8 @@ def _pill(text):
     return f'<span class="pill">{text}</span>'
 
 
-def render(manifest, manifest_url, stremio_url, tmdb_enabled, proxy_enabled):
+def render(manifest, manifest_url, stremio_url, tmdb_enabled, proxy_enabled,
+           health_url=None, connect_url=None):
     type_labels = {"movie": "Filmes", "series": "Séries"}
     type_pills = "\n      ".join(
         _pill(type_labels.get(t, t.capitalize())) for t in manifest.get("types", [])
@@ -452,11 +453,13 @@ def render(manifest, manifest_url, stremio_url, tmdb_enabled, proxy_enabled):
     if tmdb_enabled:
         tmdb = ("ok", "Ativo", "IDs tmdb: resolvidos e títulos em pt-BR disponíveis")
     else:
-        tmdb = (
-            "warn",
-            "Não configurado",
-            "Defina TMDB_API_KEY para resolver IDs tmdb: e títulos em pt-BR",
+        tmdb_hint = (
+            f"Adicione sua chave em {connect_url} para resolver IDs tmdb: "
+            "e ver títulos em pt-BR"
+            if connect_url else
+            "Conecte sua chave TMDB para resolver IDs tmdb: e títulos em pt-BR"
         )
+        tmdb = ("warn", "Não configurado", tmdb_hint)
 
     if proxy_enabled:
         proxy = (
@@ -481,6 +484,7 @@ def render(manifest, manifest_url, stremio_url, tmdb_enabled, proxy_enabled):
         type_pills=type_pills,
         manifest_url=manifest_url,
         stremio_url=stremio_url,
+        health_url=health_url or "/health",
         tmdb_dot=tmdb[0],
         tmdb_val=tmdb[1],
         tmdb_sub=tmdb[2],
