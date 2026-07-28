@@ -93,6 +93,9 @@ def init_schema():
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS drive_account_pinned "
             "BOOLEAN NOT NULL DEFAULT FALSE;"
         )
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT;"
+        )
 
 
 def _is_expired(user_row: dict) -> bool:
@@ -274,6 +277,7 @@ def list_users() -> list[dict]:
                    u.drive_account_id, u.drive_account_pinned, u.expires_at,
                    u.created_at, u.connected_at,
                    (u.tmdb_api_key IS NOT NULL) AS tmdb_connected,
+                   (u.password_hash IS NOT NULL) AS has_password,
                    da.label AS drive_label
             FROM users u
             LEFT JOIN drive_accounts da ON da.id = u.drive_account_id
@@ -294,6 +298,28 @@ def get_user_by_invite_token(token: str) -> dict | None:
         return conn.execute(
             "SELECT * FROM users WHERE invite_token = %s", (token,)
         ).fetchone()
+
+
+def get_user_by_email(email: str) -> dict | None:
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM users WHERE email = %s", (email.strip().lower(),)
+        ).fetchone()
+
+
+def set_password(user_id: str, password_hash: str) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE users SET password_hash = %s WHERE id = %s",
+            (password_hash, user_id),
+        )
+
+
+def clear_password(user_id: str) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE users SET password_hash = NULL WHERE id = %s", (user_id,)
+        )
 
 
 def set_active(user_id: str, active: bool) -> None:

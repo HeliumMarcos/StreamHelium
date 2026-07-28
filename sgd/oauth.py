@@ -159,6 +159,25 @@ def connect_landing(invite_token):
     user_row = _require_invited_user(invite_token)
     tmdb_connected = user_row["tmdb_api_key"] is not None
     tmdb_note = "Chave salva." if tmdb_connected else "Opcional - melhora títulos em pt-BR."
+    has_password = bool(user_row.get("password_hash"))
+    password_error = request.args.get("password_error")
+
+    if has_password:
+        password_block = f"""
+    <p style="color:#34d399">✓ Senha definida.</p>
+    <p><a href="/login" style="color:#8b5cf6">Entrar com email e senha</a></p>
+    <details style="margin-top:.5rem">
+      <summary style="cursor:pointer;color:#a79fbb;font-size:.85rem">Trocar senha</summary>
+      {_password_form(invite_token, password_error)}
+    </details>
+"""
+    else:
+        password_block = f"""
+    <p style="color:#a79fbb">Defina uma senha pra poder entrar depois em
+    <a href="/login" style="color:#8b5cf6">/login</a> só com email e senha,
+    sem precisar guardar esse link.</p>
+    {_password_form(invite_token, password_error)}
+"""
 
     html = f"""
 <meta charset="utf-8">
@@ -174,6 +193,8 @@ def connect_landing(invite_token):
     <a href="/u/{user_row['id']}/"
        style="display:inline-block;margin:1rem 0;padding:.6rem 1.2rem;border-radius:.5rem;
               background:#8b5cf6;color:#fff;text-decoration:none">Ver instruções de instalação</a>
+    <hr style="border-color:#221a33;margin:1.5rem 0">
+    {password_block}
     <hr style="border-color:#221a33;margin:1.5rem 0">
     <form method="post" action="/connect/{invite_token}/tmdb"
           style="display:flex;gap:.5rem;justify-content:center">
@@ -191,6 +212,25 @@ def connect_landing(invite_token):
 </div>
 """
     return Response(html, mimetype="text/html; charset=utf-8")
+
+
+def _password_form(invite_token, password_error):
+    error_html = (
+        '<p style="color:#ef4444;font-size:.85rem">As senhas não coincidem '
+        'ou têm menos de 6 caracteres.</p>' if password_error else ""
+    )
+    return f"""
+    {error_html}
+    <form method="post" action="/connect/{invite_token}/set-password"
+          style="display:flex;flex-direction:column;gap:.5rem;max-width:16rem;margin:0 auto">
+      <input type="password" name="password" placeholder="Nova senha (mín. 6 caracteres)" required
+             style="padding:.5rem;border-radius:.4rem;border:1px solid #332844;background:#120c1c;color:#ece8f4">
+      <input type="password" name="confirm" placeholder="Confirmar senha" required
+             style="padding:.5rem;border-radius:.4rem;border:1px solid #332844;background:#120c1c;color:#ece8f4">
+      <button type="submit" style="padding:.5rem 1rem;border-radius:.4rem;border:none;
+              background:#8b5cf6;color:#fff;font-weight:600">Salvar senha</button>
+    </form>
+"""
 
 
 @app.route("/connect/<invite_token>/tmdb", methods=["POST"])

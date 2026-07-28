@@ -253,11 +253,13 @@ PAGE = Template(
       <button class="btn btn-ghost" id="copy" type="button">🔗 Copiar manifest</button>
     </div>
     <code class="url" id="manifest-url">$manifest_url</code>
+    $header_extra
   </header>
 
   <section>
     <h2>Status do sistema</h2>
     <div class="grid">
+      $account_status_card
       <div class="card">
         <h3><span class="dot" id="drive-dot"></span> Google Drive</h3>
         <div class="val" id="drive-val">Verificando…</div>
@@ -444,7 +446,7 @@ def _pill(text):
 
 
 def render(manifest, manifest_url, stremio_url, tmdb_enabled, proxy_enabled,
-           health_url=None, connect_url=None):
+           health_url=None, connect_url=None, account_status=None, logged_in=False):
     type_labels = {"movie": "Filmes", "series": "Séries"}
     type_pills = "\n      ".join(
         _pill(type_labels.get(t, t.capitalize())) for t in manifest.get("types", [])
@@ -474,6 +476,37 @@ def render(manifest, manifest_url, stremio_url, tmdb_enabled, proxy_enabled,
             "Defina CF_PROXY_URL para servir o vídeo por um Worker Cloudflare",
         )
 
+    if account_status:
+        if not account_status.get("active", True):
+            acc = ("", "Desativada", "Sua conta foi desativada pelo administrador")
+        elif account_status.get("expired"):
+            acc = ("", "Expirada", "Peça ao administrador pra renovar seu acesso")
+        elif account_status.get("days_left") is not None:
+            days = account_status["days_left"]
+            acc = (
+                "warn" if days <= 3 else "ok",
+                f"Expira em {days} dia{'s' if days != 1 else ''}",
+                "Fale com o administrador se precisar de mais tempo",
+            )
+        else:
+            acc = ("ok", "Ativa", "Sem prazo de expiração")
+        account_status_card = f"""
+      <div class="card">
+        <h3><span class="dot {acc[0]}"></span> Sua conta</h3>
+        <div class="val">{acc[1]}</div>
+        <div class="sub">{acc[2]}</div>
+      </div>"""
+    else:
+        account_status_card = ""
+
+    header_extra = (
+        '<p style="margin-top:10px"><a href="/logout" style="color:var(--accent-2);'
+        'font-size:13px" onclick="event.preventDefault();'
+        'document.getElementById(\'logout-form\').submit()">Sair da conta</a>'
+        '<form id="logout-form" method="post" action="/logout" style="display:none"></form></p>'
+        if logged_in else ""
+    )
+
     return PAGE.safe_substitute(
         name=manifest.get("name", "Stremio Add-on"),
         version=manifest.get("version", ""),
@@ -485,6 +518,8 @@ def render(manifest, manifest_url, stremio_url, tmdb_enabled, proxy_enabled,
         manifest_url=manifest_url,
         stremio_url=stremio_url,
         health_url=health_url or "/health",
+        account_status_card=account_status_card,
+        header_extra=header_extra,
         tmdb_dot=tmdb[0],
         tmdb_val=tmdb[1],
         tmdb_sub=tmdb[2],

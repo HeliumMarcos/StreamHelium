@@ -181,6 +181,18 @@ def test_admin_auto_assign_user_unpins_and_rebalances(client, monkeypatch):
     assert calls == [("abc", "d3", False)]
 
 
+def test_admin_reset_password(client, monkeypatch):
+    monkeypatch.setattr("sgd.db.get_user", lambda uid: {"id": uid})
+    calls = []
+    monkeypatch.setattr("sgd.db.clear_password", lambda uid: calls.append(uid))
+    _login(client)
+
+    resp = client.post("/admin/users/abc/reset-password")
+
+    assert resp.status_code == 302
+    assert calls == ["abc"]
+
+
 def test_admin_delete_user(client, monkeypatch):
     calls = []
     monkeypatch.setattr("sgd.db.delete_user", lambda uid: calls.append(uid))

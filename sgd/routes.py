@@ -179,6 +179,9 @@ def favicon():
 
 @app.route("/u/<user_id>/")
 def user_landing(user_id):
+    from flask import session
+    from sgd.family_auth import build_account_status
+
     page = home.render(
         manifest=manifest_for(g.user),
         manifest_url=manifest_url(user_id),
@@ -187,6 +190,8 @@ def user_landing(user_id):
         proxy_enabled=bool(os.environ.get("CF_PROXY_URL")),
         health_url=f"/u/{user_id}/health",
         connect_url=f"/connect/{g.user['invite_token']}" if g.user.get("invite_token") else None,
+        account_status=build_account_status(g.user),
+        logged_in=session.get("family_user_id") == user_id,
     )
     resp = Response(page, mimetype="text/html; charset=utf-8")
     resp.headers["X-Robots-Tag"] = "noindex"

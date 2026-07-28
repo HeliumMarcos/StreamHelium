@@ -33,3 +33,4 @@ from sgd import home  # noqa: E402
 from sgd import routes  # noqa: E402
 from sgd import oauth  # noqa: E402
 from sgd import admin  # noqa: E402
+from sgd import family_auth  # noqa: E402

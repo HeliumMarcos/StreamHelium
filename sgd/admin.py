@@ -132,7 +132,7 @@ def admin_home():
         f'<option value="{d["id"]}">{escape(d["label"])}</option>' for d in connected_drives
     )
     rows = "\n".join(_user_row(u, connected_drives) for u in users) or (
-        '<tr><td colspan="6" style="color:var(--dim)">Nenhuma conta ainda.</td></tr>'
+        '<tr><td colspan="7" style="color:var(--dim)">Nenhuma conta ainda.</td></tr>'
     )
 
     if not drive_accounts:
@@ -158,7 +158,7 @@ def admin_home():
         <button type="submit">Adicionar</button>
       </form>
       <table>
-        <tr><th>Conta</th><th>Drive atribuído</th><th>TMDB</th><th>Expira</th><th>Convite</th><th></th></tr>
+        <tr><th>Conta</th><th>Drive atribuído</th><th>TMDB</th><th>Senha</th><th>Expira</th><th>Convite</th><th></th></tr>
         {rows}
       </table>
       <form method="post" action="/admin/logout" style="margin-top:2rem">
@@ -190,6 +190,7 @@ def _user_row(u, connected_drives):
         status_label = "ativo"
 
     tmdb = "sim" if u["tmdb_connected"] else "—"
+    senha = "definida" if u.get("has_password") else "—"
     invite_url = f"/connect/{u['invite_token']}"
     name = escape(u["display_name"] or "")
     toggle_label = "Desativar" if u["active"] else "Ativar"
@@ -224,6 +225,9 @@ def _user_row(u, connected_drives):
         {auto_button}
       </td>
       <td>{tmdb}</td>
+      <td>{senha}
+        {'<form class="inline" method="post" action="/admin/users/' + str(u['id']) + '/reset-password" onsubmit="return confirm(\'Resetar a senha? A pessoa precisa definir uma nova pelo link de convite.\')"><button type="submit" class="ghost" style="font-size:.75rem;padding:.2rem .4rem">Resetar</button></form>' if u.get('has_password') else ''}
+      </td>
       <td>{expiry_html}</td>
       <td><a href="{invite_url}" target="_blank"><code>{invite_url}</code></a></td>
       <td style="white-space:nowrap">
@@ -323,6 +327,16 @@ def admin_auto_assign_user(uid):
         abort(404)
     auto = db.pick_least_loaded_drive_account()
     db.reassign_drive_account(uid, str(auto["id"]) if auto else None, pinned=False)
+    return redirect("/admin")
+
+
+@app.route("/admin/users/<uid>/reset-password", methods=["POST"])
+@require_admin
+def admin_reset_password(uid):
+    user_row = db.get_user(uid)
+    if not user_row:
+        abort(404)
+    db.clear_password(uid)
     return redirect("/admin")
 
 
