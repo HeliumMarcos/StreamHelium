@@ -403,6 +403,42 @@ PAGE = Template(
 )
 
 
+LANDING_PAGE = Template(
+    """
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Stream Helium</title>
+<style>
+  :root {
+    --bg: #0a0710; --txt: #ece8f4; --txt-dim: #a79fbb; --accent: #8b5cf6;
+  }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center;
+    justify-content: center; background: var(--bg); color: var(--txt);
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    text-align: center; padding: 24px; box-sizing: border-box;
+  }
+  a { color: var(--accent); }
+  h1 { font-size: 1.4rem; margin-bottom: .5rem; }
+  p { color: var(--txt-dim); max-width: 32rem; margin: .5rem auto; }
+</style>
+<div>
+  <h1>Stream Helium</h1>
+  <p>Este é um addon Stremio privado, com acesso por convite.</p>
+  <p>Se você recebeu um link de convite, abra-o para conectar seu Google
+  Drive. Se você é o administrador, acesse <a href="/admin">/admin</a>.</p>
+</div>
+"""
+)
+
+
+def render_landing():
+    """Generic root page - no single account is tied to '/' anymore since
+    each user has their own /u/<user_id>/ addon URL."""
+    return LANDING_PAGE.safe_substitute()
+
+
 def _pill(text):
     return f'<span class="pill">{text}</span>'
 

@@ -10,11 +10,15 @@ logger = logging.getLogger(__name__)
 
 
 class GoogleDrive:
-    def __init__(self, token):
+    def __init__(self, token, cache_namespace="default"):
+        """cache_namespace MUST be unique per user - the on-disk cache
+        (/tmp) can be reused across requests within the same warm serverless
+        instance, and without namespacing, one user's cached access token or
+        drive names could leak into another user's response."""
         self.token = token
         self.page_size = 1000
-        self.acc_token = Pickle("acctoken.pickle")
-        self.drive_names = Json("drivenames.json")
+        self.acc_token = Pickle(f"acctoken_{cache_namespace}.pickle")
+        self.drive_names = Json(f"drivenames_{cache_namespace}.json")
 
         creds = Credentials.from_authorized_user_info(self.token)
         self.drive_instance = build("drive", "v3", credentials=creds)

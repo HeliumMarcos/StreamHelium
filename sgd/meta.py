@@ -16,6 +16,18 @@ logger = logging.getLogger(__name__)
 METADATA_CACHE_TTL = timedelta(days=7)
 
 
+def _tmdb_api_key():
+    """The requesting user's own TMDB key if set (multi-tenant), else the
+    deployment-wide TMDB_API_KEY env var (single-tenant/back-compat)."""
+    try:
+        from flask import g, has_request_context
+        if has_request_context() and getattr(g, "tmdb_api_key", None):
+            return g.tmdb_api_key
+    except RuntimeError:
+        pass
+    return os.environ.get("TMDB_API_KEY")
+
+
 class MetadataNotFound(Exception):
     pass
 
@@ -66,7 +78,7 @@ class IMDb:
         self.titles = cleaned_titles
 
     def get_meta_from_tmdb(self):
-        tmdb_key = os.environ.get("TMDB_API_KEY")
+        tmdb_key = _tmdb_api_key()
         if not tmdb_key:
             return False
             
@@ -278,7 +290,7 @@ class Meta(IMDb):
         if cache.contents.get("imdb_id"):
             return cache.contents["imdb_id"]
 
-        tmdb_key = os.environ.get("TMDB_API_KEY")
+        tmdb_key = _tmdb_api_key()
         if not tmdb_key:
             logger.warning("TMDB_API_KEY is not set; can't convert TMDB id %s", tmdb_numeric_id)
             return None
