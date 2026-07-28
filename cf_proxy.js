@@ -97,9 +97,14 @@ async function streamFile(env, accountId, range, fileId, fileName) {
     },
   })
 
-  const { readable, writable } = new TransformStream()
-  resp.body.pipeTo(writable)
-  return new Response(readable, resp)
+  // Return the upstream body directly - no manual TransformStream/pipeTo.
+  // Piping manually left an un-awaited, uncaught promise: every time the
+  // player cancels a range request mid-stream (normal during buffering/
+  // seeking - happens constantly with video), that promise rejected and
+  // Cloudflare logged it as a Worker error. Passing resp.body straight
+  // through lets the platform handle cancellation itself, with nothing
+  // left dangling.
+  return new Response(resp.body, resp)
 }
 
 async function getAccessToken(accountId, credentials) {

@@ -363,6 +363,28 @@ def renew_user(user_id: str, days: int) -> None:
         )
 
 
+def update_user(
+    user_id: str,
+    email: str,
+    display_name: str | None,
+    expires_at: datetime | None,
+    clear_expiration: bool = False,
+) -> None:
+    """Direct edit of an existing family account - unlike renew_user() this
+    sets an exact expiration (or None for no expiration at all), not a
+    relative +N days."""
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE users
+            SET email = %s, display_name = %s,
+                expires_at = %s
+            WHERE id = %s
+            """,
+            (email, display_name, None if clear_expiration else expires_at, user_id),
+        )
+
+
 def clear_expiration(user_id: str) -> None:
     with get_conn() as conn:
         conn.execute("UPDATE users SET expires_at = NULL WHERE id = %s", (user_id,))

@@ -188,6 +188,68 @@ def test_admin_auto_assign_user_unpins_and_rebalances(client, monkeypatch):
     assert calls == [("abc", "d3", False)]
 
 
+def test_admin_edit_user_updates_fields(client, monkeypatch):
+    monkeypatch.setattr("sgd.db.get_user", lambda uid: {"id": uid})
+    calls = []
+    monkeypatch.setattr(
+        "sgd.db.update_user",
+        lambda uid, email, display_name, expires_at, clear_expiration=False:
+            calls.append((uid, email, display_name, expires_at, clear_expiration)),
+    )
+    _login(client)
+
+    resp = client.post(
+        "/admin/users/abc/edit",
+        data={"email": "Novo@Example.com", "display_name": "Novo Nome",
+              "expires_at": "2026-12-31"},
+    )
+
+    assert resp.status_code == 302
+    assert resp.headers["Location"] == "/admin"
+    uid, email, name, expires_at, clear = calls[0]
+    assert email == "novo@example.com"
+    assert name == "Novo Nome"
+    assert expires_at.year == 2026 and expires_at.month == 12 and expires_at.day == 31
+    assert clear is False
+
+
+def test_admin_edit_user_no_expiration(client, monkeypatch):
+    monkeypatch.setattr("sgd.db.get_user", lambda uid: {"id": uid})
+    calls = []
+    monkeypatch.setattr(
+        "sgd.db.update_user",
+        lambda uid, email, display_name, expires_at, clear_expiration=False:
+            calls.append((uid, email, display_name, expires_at, clear_expiration)),
+    )
+    _login(client)
+
+    resp = client.post(
+        "/admin/users/abc/edit",
+        data={"email": "sempre@example.com", "no_expiration": "on"},
+    )
+
+    assert resp.status_code == 302
+    assert calls == [("abc", "sempre@example.com", None, None, True)]
+
+
+def test_admin_edit_user_rejects_invalid_email(client, monkeypatch):
+    monkeypatch.setattr("sgd.db.get_user", lambda uid: {"id": uid})
+    _login(client)
+
+    resp = client.post("/admin/users/abc/edit", data={"email": "not-an-email"})
+
+    assert resp.status_code == 400
+
+
+def test_admin_edit_user_missing_user_404s(client, monkeypatch):
+    monkeypatch.setattr("sgd.db.get_user", lambda uid: None)
+    _login(client)
+
+    resp = client.post("/admin/users/missing/edit", data={"email": "x@example.com"})
+
+    assert resp.status_code == 404
+
+
 def test_admin_reset_password(client, monkeypatch):
     monkeypatch.setattr("sgd.db.get_user", lambda uid: {"id": uid})
     calls = []
@@ -223,6 +285,33 @@ def test_admin_renew_user(client, monkeypatch):
 
     assert resp.status_code == 302
     assert calls == [("abc", 30)]
+
+
+def test_admin_drives_list_shows_live_status(client, monkeypatch):
+    monkeypatch.setattr("sgd.db.list_drive_accounts", lambda: [{
+        "id": "d1", "label": "Drive 1", "active": True,
+        "connected": True, "assigned_count": 2,
+    }])
+
+    class FakeGoogleDrive:
+        pass
+
+    monkeypatch.setattr("sgd.tenancy._get_drive_instance", lambda did: FakeGoogleDrive())
+    monkeypatch.setattr(
+        "sgd.routes.drive_status",
+        lambda gdrive: {
+            "connected": True, "account": "h****z@gmail.com",
+            "usage_human": "10.0GiB", "limit_human": "100.0GiB", "usage_pct": 10.0,
+        },
+    )
+    _login(client)
+
+    resp = client.get("/admin/drives")
+
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "h****z@gmail.com" in body
+    assert "10.0GiB" in body
 
 
 def test_admin_drives_list(client, monkeypatch):

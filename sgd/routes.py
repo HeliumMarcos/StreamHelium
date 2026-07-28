@@ -140,11 +140,14 @@ def mask_email(email):
     return f"{user[0]}{'*' * (len(user) - 2)}{user[-1]}@{domain}"
 
 
-def drive_status():
-    """A cheap liveness check against the Drive API for the user's landing page."""
+def drive_status(gdrive):
+    """A cheap liveness check against the Drive API. Takes the GoogleDrive
+    instance explicitly so it can be called both from a family account's
+    request (g.gdrive) and from the admin panel (one per pool account,
+    outside any /u/<user_id>/ request context)."""
     try:
         about = (
-            g.gdrive.drive_instance.about()
+            gdrive.drive_instance.about()
             .get(fields="user(displayName,emailAddress),storageQuota")
             .execute()
         )
@@ -192,7 +195,7 @@ def health():
 
 @app.route("/u/<user_id>/health")
 def user_health(user_id):
-    status = drive_status()
+    status = drive_status(g.gdrive)
     payload = {
         "status": "ok" if status.get("connected") else "degraded",
         "addon": {

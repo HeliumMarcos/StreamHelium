@@ -25,6 +25,22 @@ from sgd import app, db
 logger = logging.getLogger(__name__)
 
 
+def _live_drive_status(drive_account_id):
+    """Best-effort - never raises, since one broken account shouldn't take
+    down the whole admin page."""
+    try:
+        from sgd.tenancy import _get_drive_instance
+        from sgd.routes import drive_status
+
+        gdrive = _get_drive_instance(str(drive_account_id))
+        if gdrive is None:
+            return None
+        return drive_status(gdrive)
+    except Exception as e:
+        logger.warning("Could not fetch live status for drive %s: %s", drive_account_id, e)
+        return None
+
+
 def _admin_password():
     pw = os.environ.get("ADMIN_PASSWORD")
     if not pw:
@@ -151,10 +167,16 @@ def _page(body, title="Admin - Stream Helium", active=""):
   @media (max-width:640px) {{
     table, thead, tbody, tr {{ display:block; }}
     th {{ display:none; }}
-    tr {{ border:1px solid var(--brd); border-radius:.6rem; padding:.6rem; margin-bottom:.6rem; }}
-    td {{ border:none; padding:.25rem 0; }}
-    td::before {{ content: attr(data-label); display:block; color:var(--dim); font-size:.72rem;
-                  text-transform:uppercase; letter-spacing:.03em; margin-bottom:.1rem; }}
+    tr {{ display:block; border:1px solid var(--brd); border-radius:.7rem; padding:.7rem;
+          margin-bottom:.7rem; }}
+    td {{ display:block; width:100%; border:none; padding:.35rem 0; }}
+    td::before {{ content: attr(data-label); display:block; color:var(--dim); font-size:.7rem;
+                  text-transform:uppercase; letter-spacing:.03em; margin-bottom:.15rem; }}
+    td select {{ width:100%; }}
+    .row-actions {{ justify-content:flex-start; }}
+    form.create {{ flex-direction:column; align-items:stretch; }}
+    form.create input, form.create select {{ width:100%; }}
+    .stats {{ grid-template-columns:repeat(2, 1fr); }}
   }}
 </style>
 <main>
@@ -360,7 +382,26 @@ def _user_row(u, connected_drives):
     <tr>
       <td data-label="Conta"><span class="dot {status_dot}"></span>{escape(u['email'])}
           {f'<div class="name">{name}</div>' if name else ''}
-          <div class="status-label">{status_label}</div></td>
+          <div class="status-label">{status_label}</div>
+          <details style="margin-top:.4rem">
+            <summary style="cursor:pointer;color:var(--accent-2);font-size:.78rem">Editar</summary>
+            <form method="post" action="/admin/users/{u['id']}/edit"
+                  style="display:flex;flex-direction:column;gap:.4rem;margin-top:.5rem;max-width:16rem">
+              <input type="email" name="email" value="{escape(u['email'])}" required>
+              <input type="text" name="display_name" placeholder="Nome" value="{name}">
+              <label style="font-size:.75rem;color:var(--dim)">Expira em
+                <input type="date" name="expires_at"
+                       value="{u['expires_at'].strftime('%Y-%m-%d') if u.get('expires_at') else ''}">
+              </label>
+              <label style="font-size:.78rem;display:flex;align-items:center;gap:.35rem">
+                <input type="checkbox" name="no_expiration" style="width:auto"
+                       {"checked" if not u.get('expires_at') else ""}>
+                Sem prazo de expiração
+              </label>
+              <button type="submit" class="sm">Salvar</button>
+            </form>
+          </details>
+      </td>
       <td data-label="Drive">{drive_label}{pin_badge}
         <form class="inline" method="post" action="/admin/users/{u['id']}/reassign" style="display:block;margin-top:.35rem">
           <select name="drive_account_id" style="font-size:.78rem;padding:.25rem">
@@ -429,6 +470,32 @@ def admin_toggle_user(uid):
     if not user_row:
         abort(404)
     db.set_active(uid, not user_row["active"])
+    return redirect("/admin")
+
+
+@app.route("/admin/users/<uid>/edit", methods=["POST"])
+@require_admin
+def admin_edit_user(uid):
+    user_row = db.get_user(uid)
+    if not user_row:
+        abort(404)
+
+    email = (request.form.get("email") or "").strip().lower()
+    display_name = (request.form.get("display_name") or "").strip() or None
+    clear_expiration = request.form.get("no_expiration") == "on"
+    expires_raw = (request.form.get("expires_at") or "").strip()
+
+    if not email or "@" not in email:
+        abort(400)
+
+    expires_at = None
+    if not clear_expiration and expires_raw:
+        try:
+            expires_at = datetime.strptime(expires_raw, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            abort(400)
+
+    db.update_user(uid, email, display_name, expires_at, clear_expiration=clear_expiration)
     return redirect("/admin")
 
 
@@ -528,10 +595,32 @@ def admin_drives():
 def _drive_row(d):
     if not d["connected"]:
         status = '<span class="dot warn"></span>não conectado'
+        detail = ""
     elif not d["active"]:
         status = '<span class="dot"></span>desativado'
+        detail = ""
     else:
         status = '<span class="dot ok"></span>conectado'
+        live = _live_drive_status(d["id"])
+        if live and live.get("connected"):
+            usage = live.get("usage_human", "?")
+            limit = live.get("limit_human")
+            pct = live.get("usage_pct")
+            bar = (
+                f'<div style="height:5px;border-radius:3px;background:var(--bg-soft);'
+                f'margin-top:.3rem;overflow:hidden"><div style="height:100%;width:{pct}%;'
+                f'background:linear-gradient(90deg,var(--accent-2),var(--accent))"></div></div>'
+                if pct is not None else ""
+            )
+            detail = (
+                f'<div class="status-label">{escape(live.get("account") or "")}</div>'
+                f'<div class="status-label">{usage}{" de " + limit if limit else ""} em uso</div>'
+                f'{bar}'
+            )
+        elif live:
+            detail = f'<div class="status-label" style="color:var(--err)">Sem resposta do Drive ({escape(live.get("error",""))})</div>'
+        else:
+            detail = ""
 
     connect_label = "Reconectar" if d["connected"] else "Conectar ao Google"
     toggle_label = "Desativar" if d["active"] else "Ativar"
@@ -539,7 +628,7 @@ def _drive_row(d):
     return f"""
     <tr>
       <td data-label="Conta">{escape(d['label'])}</td>
-      <td data-label="Status">{status}</td>
+      <td data-label="Status">{status}{detail}</td>
       <td data-label="Famílias">{d['assigned_count']}</td>
       <td data-label="Ações">
         <div class="row-actions">
