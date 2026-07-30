@@ -105,7 +105,34 @@ def test_admin_free_device(client, monkeypatch):
     assert calls == ["abc"]
 
 
-# --- meta.py TMDB pool rotation --------------------------------------------
+# --- Cloudflare proxy toggle -------------------------------------------
+
+def test_proxy_toggle_enabled_by_default(monkeypatch):
+    import sgd.streams as streams
+    streams._proxy_toggle_cache["fetched_at"] = 0.0
+    monkeypatch.setattr("sgd.db.get_setting", lambda key, default=None: default)
+    assert streams.proxy_toggle_enabled() is True
+    streams._proxy_toggle_cache["fetched_at"] = 0.0
+
+
+def test_proxy_toggle_disabled_when_setting_is_zero(monkeypatch):
+    import sgd.streams as streams
+    streams._proxy_toggle_cache["fetched_at"] = 0.0
+    monkeypatch.setattr("sgd.db.get_setting", lambda key, default=None: "0")
+    assert streams.proxy_toggle_enabled() is False
+    streams._proxy_toggle_cache["fetched_at"] = 0.0
+
+
+def test_proxy_toggle_fails_open_on_db_error(monkeypatch):
+    import sgd.streams as streams
+    streams._proxy_toggle_cache["fetched_at"] = 0.0
+
+    def boom(*a, **k):
+        raise RuntimeError("db down")
+    monkeypatch.setattr("sgd.db.get_setting", boom)
+
+    assert streams.proxy_toggle_enabled() is True
+    streams._proxy_toggle_cache["fetched_at"] = 0.0
 
 def test_meta_tmdb_api_key_uses_pool(monkeypatch):
     import sgd.meta as meta

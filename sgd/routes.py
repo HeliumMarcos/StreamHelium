@@ -79,6 +79,11 @@ def manifest_url(user_id):
     return f"https://{request.host}/u/{user_id}/manifest.json"
 
 
+def _proxy_actually_enabled():
+    from sgd.streams import proxy_toggle_enabled
+    return proxy_toggle_enabled()
+
+
 def _tmdb_pool_has_key():
     try:
         return db.has_active_tmdb_key()
@@ -227,7 +232,7 @@ def user_landing(user_id):
         manifest_url=manifest_url(user_id),
         stremio_url=f"stremio://{request.host}/u/{user_id}/manifest.json",
         tmdb_enabled=_tmdb_pool_has_key(),
-        proxy_enabled=bool(os.environ.get("CF_PROXY_URL")),
+        proxy_enabled=bool(os.environ.get("CF_PROXY_URL")) and _proxy_actually_enabled(),
         health_url=f"/u/{user_id}/health",
         connect_url=f"/connect/{g.user['invite_token']}" if g.user.get("invite_token") else None,
         account_status=build_account_status(g.user),

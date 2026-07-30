@@ -292,6 +292,7 @@ def test_admin_drives_list_shows_live_status(client, monkeypatch):
         "id": "d1", "label": "Drive 1", "active": True,
         "connected": True, "assigned_count": 2,
     }])
+    monkeypatch.setattr("sgd.db.get_setting", lambda key, default=None: default)
 
     class FakeGoogleDrive:
         pass
@@ -319,6 +320,7 @@ def test_admin_drives_list(client, monkeypatch):
         "id": "d1", "label": "Drive 1", "active": True,
         "connected": False, "assigned_count": 0,
     }])
+    monkeypatch.setattr("sgd.db.get_setting", lambda key, default=None: default)
     _login(client)
 
     resp = client.get("/admin/drives")
@@ -386,6 +388,44 @@ def test_admin_routes_require_login_even_with_valid_data(client, monkeypatch):
     resp = client.post("/admin/users", data={"email": "x@example.com"})
     assert resp.status_code == 302
     assert resp.headers["Location"] == "/admin/login"
+
+
+def test_admin_toggle_proxy_off_to_on(client, monkeypatch):
+    monkeypatch.setattr("sgd.db.get_setting", lambda key, default=None: "0")
+    calls = []
+    monkeypatch.setattr(
+        "sgd.db.set_setting", lambda key, value: calls.append((key, value))
+    )
+    _login(client)
+
+    resp = client.post("/admin/settings/proxy/toggle")
+
+    assert resp.status_code == 302
+    assert resp.headers["Location"] == "/admin/drives"
+    assert calls == [("cf_proxy_enabled", "1")]
+
+
+def test_admin_toggle_proxy_on_to_off(client, monkeypatch):
+    monkeypatch.setattr("sgd.db.get_setting", lambda key, default=None: "1")
+    calls = []
+    monkeypatch.setattr(
+        "sgd.db.set_setting", lambda key, value: calls.append((key, value))
+    )
+    _login(client)
+
+    resp = client.post("/admin/settings/proxy/toggle")
+
+    assert calls == [("cf_proxy_enabled", "0")]
+
+
+def test_admin_drives_shows_proxy_warning_when_not_configured(client, monkeypatch):
+    monkeypatch.setattr("sgd.db.list_drive_accounts", lambda: [])
+    monkeypatch.setattr("sgd.db.get_setting", lambda key, default=None: default)
+    _login(client)
+
+    resp = client.get("/admin/drives")
+
+    assert "CF_PROXY_URL" in resp.get_data(as_text=True)
 
 
 def test_admin_drives_worker_config(client, monkeypatch):

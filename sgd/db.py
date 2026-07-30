@@ -121,6 +121,15 @@ def init_schema():
             """
         )
 
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
+            """
+        )
+
 
 def _is_expired(user_row: dict) -> bool:
     expires_at = user_row.get("expires_at")
@@ -530,7 +539,25 @@ def clear_device_session(user_id: str) -> None:
         conn.execute("DELETE FROM device_sessions WHERE user_id = %s", (user_id,))
 
 
-# --- overview stats for the admin dashboard ---------------------------------
+# --- generic settings (key/value) ------------------------------------------
+
+def get_setting(key: str, default: str | None = None) -> str | None:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key = %s", (key,)
+        ).fetchone()
+    return row["value"] if row else default
+
+
+def set_setting(key: str, value: str) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO settings (key, value) VALUES (%s, %s)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+            """,
+            (key, value),
+        )
 
 def get_admin_overview() -> dict:
     with get_conn() as conn:

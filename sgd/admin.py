@@ -572,11 +572,36 @@ def admin_drives():
         '<tr><td colspan="4" class="muted">Nenhuma conta Drive ainda.</td></tr>'
     )
 
+    cf_configured = bool(os.environ.get("CF_PROXY_URL"))
+    proxy_on = db.get_setting("cf_proxy_enabled", default="1") != "0"
+    if not cf_configured:
+        proxy_toggle = (
+            '<p class="lede" style="color:var(--warn)">⚠️ CF_PROXY_URL não está '
+            'configurada na Vercel - esse botão não tem efeito até você definir a env var.</p>'
+        )
+    else:
+        dot = "ok" if proxy_on else ""
+        label = "Ativado" if proxy_on else "Desativado"
+        action_label = "Desativar" if proxy_on else "Ativar"
+        proxy_toggle = f"""
+        <div class="panel" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.7rem">
+          <div>
+            <div><span class="dot {dot}"></span><strong>Proxy Cloudflare: {label}</strong></div>
+            <div class="status-label">Quando desativado, todo mundo passa a receber o vídeo
+            direto da API do Google (sem cache, sem esconder o token) até você reativar.</div>
+          </div>
+          <form method="post" action="/admin/settings/proxy/toggle">
+            <button type="submit" class="{'ghost' if proxy_on else ''}">{action_label}</button>
+          </form>
+        </div>
+        """
+
     return _page(f"""
       <h1>Contas Drive</h1>
       <p class="lede">Todas devem apontar pra mesma pasta compartilhada. Novas
       contas de família são atribuídas automaticamente a quem tiver menos gente.
       <a href="/admin/drives/worker-config">Ver configuração do Worker →</a></p>
+      {proxy_toggle}
       <div class="panel">
         <form class="create" method="post" action="/admin/drives">
           <input type="text" name="label" placeholder="Nome (ex: Drive 1)" required>
@@ -590,6 +615,14 @@ def admin_drives():
         </table>
       </div>
     """, title="Contas Drive - Admin", active="drives")
+
+
+@app.route("/admin/settings/proxy/toggle", methods=["POST"])
+@require_admin
+def admin_toggle_proxy():
+    current = db.get_setting("cf_proxy_enabled", default="1") != "0"
+    db.set_setting("cf_proxy_enabled", "0" if current else "1")
+    return redirect("/admin/drives")
 
 
 def _drive_row(d):

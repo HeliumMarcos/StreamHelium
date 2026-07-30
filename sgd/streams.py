@@ -1,4 +1,5 @@
 import os
+import time
 import logging
 import urllib
 import re
@@ -6,6 +7,26 @@ from sgd.ptn import parse_title
 from sgd.utils import hr_size, strip_accents, STOP_WORDS
 
 logger = logging.getLogger(__name__)
+
+# Admin on/off switch for the Cloudflare proxy (independent of whether
+# CF_PROXY_URL is configured) - cached briefly so every stream search
+# doesn't hit Postgres just to check a boolean.
+_PROXY_TOGGLE_TTL_SECONDS = 60
+_proxy_toggle_cache = {"enabled": True, "fetched_at": 0.0}
+
+
+def proxy_toggle_enabled():
+    now = time.time()
+    if now - _proxy_toggle_cache["fetched_at"] > _PROXY_TOGGLE_TTL_SECONDS:
+        try:
+            from sgd import db
+            value = db.get_setting("cf_proxy_enabled", default="1")
+            _proxy_toggle_cache["enabled"] = value != "0"
+        except Exception as e:
+            logger.warning("Could not read cf_proxy_enabled setting, defaulting to on: %s", e)
+            _proxy_toggle_cache["enabled"] = True
+        _proxy_toggle_cache["fetched_at"] = now
+    return _proxy_toggle_cache["enabled"]
 
 
 class Streams:
@@ -15,6 +36,9 @@ class Streams:
         self.strm_meta = stream_meta
         self.get_url = self.get_proxy_url
         self.proxy_url = os.environ.get("CF_PROXY_URL")
+
+        if self.proxy_url and not proxy_toggle_enabled():
+            self.proxy_url = None
 
         if not self.proxy_url:
             self.get_url = self.get_gapi_url
