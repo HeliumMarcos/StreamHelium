@@ -1,4 +1,9 @@
-// Multi-account Google Drive streaming proxy, with edge caching.
+// Google Drive streaming proxy - hides the OAuth token from the player,
+// supports multiple pool accounts. No edge caching: Cloudflare's cache
+// never stores 206 Partial Content responses (which is what every ranged
+// video request gets), so there's no simple way to cache this traffic
+// without a proper manual Range-slicing implementation against the Cache
+// API - not done here, to keep playback reliable.
 //
 // Set the ACCOUNTS environment variable (Cloudflare dashboard -> Workers ->
 // your worker -> Settings -> Variables -> add as a Secret, or via
@@ -13,16 +18,6 @@
 //     },
 //     "22222222-2222-2222-2222-222222222222": { ... }
 //   }
-//
-// Optional env var: CACHE_TTL_SECONDS (default 21600 = 6h). This is the
-// part that actually reduces "too many people accessed this file" errors
-// from Google: repeat requests for the same file (and byte range) within
-// the TTL are served from Cloudflare's edge cache and never reach Drive at
-// all, regardless of how many pool accounts or family accounts exist.
-// Splitting accounts into a pool does NOT do this by itself - only caching
-// does, since the underlying file is shared across every account either way.
-
-const DEFAULT_CACHE_TTL_SECONDS = 21600
 
 let accountsCache = null
 function getAccounts(env) {
@@ -40,6 +35,15 @@ function getAccounts(env) {
 // cheap and normal.
 const tokenCache = new Map()
 
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+  "Access-Control-Allow-Headers": "Range, Content-Type",
+  "Access-Control-Expose-Headers":
+    "Content-Length, Content-Range, Content-Type, Accept-Ranges",
+  "Access-Control-Max-Age": "86400",
+}
+
 async function handleRequest(request, env) {
   const url = new URL(request.url)
   const parts = url.pathname.split("/").filter(Boolean)
@@ -48,12 +52,25 @@ async function handleRequest(request, env) {
     return new Response("200 Online!", { status: 200 })
   }
 
+  // Players that run in a WebView (and anything browser-based) send a CORS
+  // preflight before the actual media request. Answering it here costs
+  // nothing and stops those clients from failing before playback starts.
+  if (request.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: CORS_HEADERS })
+  }
+
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    return new Response("405 Method Not Allowed", {
+      status: 405,
+      headers: { Allow: "GET, HEAD, OPTIONS" },
+    })
+  }
+
   // Current route: /proxy/<account_id>/load/<file_id>/<file_name>
   if (parts[0] === "proxy" && parts[2] === "load") {
     const accountId = parts[1]
     const fileId = parts[3]
-    const fileName = parts[4] || "file_name.vid"
-    return streamFile(env, accountId, request.headers.get("Range"), fileId, fileName)
+    return streamFile(env, request, accountId, fileId)
   }
 
   // Legacy single-account route from before the pool model existed:
@@ -61,50 +78,90 @@ async function handleRequest(request, env) {
   // under the "default" key in ACCOUNTS.
   if (parts[0] === "load") {
     const fileId = parts[1]
-    const fileName = parts[2] || "file_name.vid"
-    return streamFile(env, "default", request.headers.get("Range"), fileId, fileName)
+    return streamFile(env, request, "default", fileId)
   }
 
   return new Response("404 Not Found!", { status: 404 })
 }
 
-async function streamFile(env, accountId, range, fileId, fileName) {
+async function streamFile(env, request, accountId, fileId) {
   const accounts = getAccounts(env)
   const credentials = accounts[accountId]
   if (!credentials) {
     return new Response(`404 Unknown account: ${accountId}`, { status: 404 })
   }
 
-  let accessToken
+  const fetchURL = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`
+  const range = request.headers.get("Range")
+
+  let resp
   try {
-    accessToken = await getAccessToken(accountId, credentials)
+    resp = await fetchFromDrive(fetchURL, accountId, credentials, range)
+    // A cached access token can be revoked (or the account re-authorized)
+    // while this isolate is still warm, and the cache entry would keep
+    // serving the dead token until the isolate is recycled. Drop it and
+    // retry once with a fresh one instead of failing playback.
+    if (resp.status === 401) {
+      tokenCache.delete(accountId)
+      resp = await fetchFromDrive(fetchURL, accountId, credentials, range)
+    }
   } catch (e) {
     return new Response(`502 ${e.message}`, { status: 502 })
   }
 
-  const ttl = parseInt(env.CACHE_TTL_SECONDS, 10) || DEFAULT_CACHE_TTL_SECONDS
-  const fetchURL = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`
+  // Build the response headers explicitly instead of copying everything
+  // Google sent - only what the player actually needs to handle Range
+  // correctly. Forwarding every original header through an extra hop is
+  // more surface area for something to get mangled along the way.
+  const headers = new Headers(CORS_HEADERS)
+  for (const key of ["content-type", "content-length", "content-range", "accept-ranges"]) {
+    const value = resp.headers.get(key)
+    if (value) headers.set(key, value)
+  }
+  if (!headers.has("accept-ranges")) headers.set("accept-ranges", "bytes")
 
-  const resp = await fetch(fetchURL, {
-    method: "GET",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      Range: range || "",
-    },
-    cf: {
-      cacheEverything: true,
-      cacheTtl: ttl,
-    },
-  })
+  // For HEAD we still had to issue a GET upstream (the Drive media endpoint
+  // only answers GET), so drop the body here rather than handing back a
+  // stream nobody will read.
+  if (request.method === "HEAD") {
+    if (resp.body) resp.body.cancel().catch(() => {})
+    return new Response(null, { status: resp.status, headers })
+  }
 
-  // Return the upstream body directly - no manual TransformStream/pipeTo.
-  // Piping manually left an un-awaited, uncaught promise: every time the
-  // player cancels a range request mid-stream (normal during buffering/
-  // seeking - happens constantly with video), that promise rejected and
-  // Cloudflare logged it as a Worker error. Passing resp.body straight
-  // through lets the platform handle cancellation itself, with nothing
-  // left dangling.
-  return new Response(resp.body, resp)
+  return new Response(resp.body, { status: resp.status, headers })
+}
+
+async function fetchFromDrive(fetchURL, accountId, credentials, range) {
+  const accessToken = await getAccessToken(accountId, credentials)
+
+  // Plain pass-through: forward the client's Range header to Google as-is.
+  // No caching here - Cloudflare never stores 206 Partial Content
+  // responses, and fetching the full file to work around that broke
+  // playback outright (players expect 206 for a ranged request, not a 200
+  // with the whole file). This is just hiding the OAuth token, nothing more.
+  //
+  // Accept-Encoding: identity - stops Google from compressing the
+  // response. Video is already compressed, so gzip/br would do nothing
+  // useful, but a compressed-response-vs-declared-length mismatch getting
+  // altered somewhere on the way through Cloudflare's edge is a documented
+  // cause of intermittent stalls/rebuffers.
+  const headers = {
+    Authorization: `Bearer ${accessToken}`,
+    "Accept-Encoding": "identity",
+  }
+
+  // Only send Range when the client actually asked for one. Setting it
+  // unconditionally used to send a literal empty `Range:` header on every
+  // request that arrived without one, and Google rejects that as malformed
+  // instead of ignoring it - so the very first request of a playback
+  // session failed and the video never started. Stremio hid the bug
+  // because its streaming server always opens with `Range: bytes=0-`;
+  // players that fetch the URL directly (Nuvio, and ExoPlayer generally)
+  // send no Range header when starting from byte 0, so they hit it every
+  // time.
+  if (range) headers.Range = range
+
+  return fetch(fetchURL, { method: "GET", headers })
 }
 
 async function getAccessToken(accountId, credentials) {

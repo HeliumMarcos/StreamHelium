@@ -41,9 +41,13 @@ e configurar:
   mesmo fluxo OAuth manualmente (rclone, ou o notebook que você já tinha)
   pra cada conta do pool, ou usar o `/admin/drives/<id>/connect-google` e
   depois consultar o valor no banco (peça ajuda se for esse o caminho).
-- **`CACHE_TTL_SECONDS`** (opcional, padrão 6h) — quanto tempo os bytes
-  ficam cacheados na borda da Cloudflare. É essa parte, não o pool de
-  contas, que reduz os "muitos acessos" no arquivo.
+Não existe mais `CACHE_TTL_SECONDS`: o cache de borda foi removido porque a
+Cloudflare não guarda respostas `206 Partial Content`, que é o que todo
+request de vídeo com `Range` recebe. O Worker hoje só esconde o token OAuth.
+
+> **Importante:** sempre que `cf_proxy.js` mudar aqui, reimplante o Worker.
+> O código publicado na Cloudflare não é atualizado pelo deploy da Vercel —
+> são dois lugares separados.
 
 O worker mudou de sintaxe (Service Worker → ES Modules com `export default`)
 — confira se o seu `wrangler.toml`/dashboard está configurado como Module,

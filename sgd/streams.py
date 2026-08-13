@@ -405,9 +405,13 @@ class Streams:
         file_name = urllib.parse.quote(str(self.item.get("name", ""))) or "file_name.vid"
         if "behaviorHints" not in self.constructed:
              self.constructed["behaviorHints"] = {}
-        self.constructed["behaviorHints"]["proxyHeaders"] = {
-            "request": {"Server": "Stremio"}
-        }
+        # No proxyHeaders on this path: the Worker URL needs no credentials,
+        # so there's nothing the client has to send. The old
+        # {"Server": "Stremio"} entry was a leftover from the upstream
+        # project - Stremio ignores it, but clients that faithfully forward
+        # proxyHeaders to their player (Nuvio) end up putting a response
+        # header on an outgoing request for no reason.
+        self.constructed["behaviorHints"].pop("proxyHeaders", None)
         account_id = getattr(self.gdrive, "account_id", None)
         if account_id:
             return f"{self.proxy_url}/proxy/{account_id}/load/{file_id}/{file_name}"

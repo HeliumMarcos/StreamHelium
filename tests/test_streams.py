@@ -194,3 +194,56 @@ def test_best_res_prefers_remux_over_webdl_at_same_resolution():
 def test_best_res_never_raises_on_malformed_item():
     s = make_streams()
     assert s.best_res(None) == 1
+
+
+# --- playback URLs ---------------------------------------------------------
+
+def test_proxy_url_sends_no_proxy_headers(monkeypatch):
+    """The Worker URL carries no credentials, so the client has nothing to
+    send. The old {"Server": "Stremio"} hint was dead weight that clients
+    forwarding proxyHeaders to their player (Nuvio) would actually put on
+    the wire."""
+    monkeypatch.setenv("CF_PROXY_URL", "https://proxy.example.com")
+    monkeypatch.setattr("sgd.streams.proxy_toggle_enabled", lambda: True)
+
+    s = make_streams()
+    s.item = {"id": "FILEID", "name": "Movie 2016.mkv"}
+    s.constructed = {"behaviorHints": {"proxyHeaders": {"request": {"Server": "Stremio"}}}}
+
+    url = s.get_proxy_url()
+
+    assert "proxyHeaders" not in s.constructed["behaviorHints"]
+    assert url == "https://proxy.example.com/load/FILEID/Movie%202016.mkv"
+
+
+def test_proxy_url_includes_account_id_when_present(monkeypatch):
+    monkeypatch.setenv("CF_PROXY_URL", "https://proxy.example.com")
+    monkeypatch.setattr("sgd.streams.proxy_toggle_enabled", lambda: True)
+
+    drive = FakeGDrive()
+    drive.account_id = "11111111-1111-1111-1111-111111111111"
+    s = Streams(drive, SimpleNamespace(type="movie", stream_type="movie",
+                                       titles=["x"], year="2016", id="tt1",
+                                       se=0, ep=0))
+    s.item = {"id": "FILEID", "name": "Movie.mkv"}
+    s.constructed = {"behaviorHints": {}}
+
+    assert s.get_proxy_url() == (
+        "https://proxy.example.com/proxy/"
+        "11111111-1111-1111-1111-111111111111/load/FILEID/Movie.mkv"
+    )
+
+
+def test_gapi_url_still_carries_the_authorization_header(monkeypatch):
+    monkeypatch.delenv("CF_PROXY_URL", raising=False)
+
+    s = make_streams()
+    s.item = {"id": "FILEID", "name": "Movie.mkv"}
+    s.constructed = {"behaviorHints": {}}
+
+    url = s.get_gapi_url()
+
+    assert s.constructed["behaviorHints"]["proxyHeaders"]["request"] == {
+        "Authorization": "Bearer fake-access-token"
+    }
+    assert url.startswith("https://www.googleapis.com/drive/v3/files/FILEID?alt=media")
