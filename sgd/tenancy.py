@@ -66,6 +66,12 @@ def _get_drive_instance(drive_account_id):
     return drive
 
 
+def drive_for_account(drive_account_id):
+    """Public accessor for a pool account's Drive instance. Returns None if
+    the account is unknown, inactive or never connected."""
+    return _get_drive_instance(str(drive_account_id))
+
+
 def load_tenant(user_id):
     """Called at the top of every /u/<user_id>/... route. Aborts the
     request (404) for unknown/inactive/expired/unassigned users rather than

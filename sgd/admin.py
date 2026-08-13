@@ -702,11 +702,46 @@ def admin_drives_worker_config():
         }
 
     pretty = escape(_json.dumps(config, indent=2, ensure_ascii=False), quote=False)
+
+    shared_secret_set = bool(os.environ.get("PROXY_SHARED_SECRET"))
+    if shared_secret_set:
+        secret_status = (
+            '<span class="dot ok"></span> <code>PROXY_SHARED_SECRET</code> está '
+            "definido nesta aplicação."
+        )
+    else:
+        secret_status = (
+            '<span class="dot"></span> <code>PROXY_SHARED_SECRET</code> <strong>não</strong> '
+            "está definido - enquanto isso, o endpoint responde 503 e o Worker não "
+            "consegue pegar token por aqui."
+        )
+
+    token_endpoint = escape(f"https://{request.host}/internal/drive-token")
+
     return _page(f"""
       <h1>Configuração do Worker</h1>
-      <p class="lede">Cole isso como o secret <code>ACCOUNTS</code> do Worker Cloudflare
-      (Settings → Variables → Add → tipo Secret). Contém segredos - não compartilhe.</p>
+
       <div class="panel">
+        <h3>Recomendado: o Worker pede o token para cá</h3>
+        <p class="lede">Assim o <code>refresh_token</code> de cada conta fica só no banco
+        desta aplicação. O Worker não guarda credencial nenhuma, e não tem como
+        as duas cópias ficarem fora de sincronia - foi exatamente isso que
+        derrubou o proxy antes (Worker com token velho → 502 em tudo).</p>
+        <p>{secret_status}</p>
+        <p>No Worker (Settings → Variables):</p>
+        <pre style="white-space:pre-wrap;word-break:break-all;font-size:.78rem;color:var(--txt);
+                    background:var(--bg-soft);padding:1rem;border-radius:.5rem">TOKEN_ENDPOINT        (texto)  {token_endpoint}
+TOKEN_ENDPOINT_SECRET (secret) mesmo valor de PROXY_SHARED_SECRET</pre>
+        <p class="lede">Com <code>TOKEN_ENDPOINT</code> definido, o <code>ACCOUNTS</code>
+        abaixo deixa de ser usado e pode ser apagado.</p>
+      </div>
+
+      <div class="panel">
+        <h3>Alternativa: credenciais dentro do Worker</h3>
+        <p class="lede">Cole isso como o secret <code>ACCOUNTS</code> do Worker Cloudflare
+        (Settings → Variables → Add → tipo Secret). Contém segredos - não compartilhe.
+        Só é lido quando <code>TOKEN_ENDPOINT</code> não está definido, e precisa ser
+        colado de novo toda vez que você reconectar uma conta em /admin/drives.</p>
         <pre style="white-space:pre-wrap;word-break:break-all;font-size:.78rem;color:var(--txt);
                     background:var(--bg-soft);padding:1rem;border-radius:.5rem">{pretty}</pre>
       </div>

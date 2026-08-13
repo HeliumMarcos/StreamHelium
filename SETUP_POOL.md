@@ -31,23 +31,62 @@
 
 ## Cloudflare Worker (`cf_proxy.js`)
 
-Se você usa `CF_PROXY_URL`, precisa reimplantar o Worker com o arquivo novo
-e configurar:
+O Worker não guarda mais credencial nenhuma. Ele pede um access token de
+curta duração pro addon, que é quem já tem os `refresh_token` no banco.
 
-- **`ACCOUNTS`** (Secret) — JSON mapeando `drive_account_id` (o UUID que
-  aparece em `/admin/drives`) pra `{client_id, client_secret, refresh_token}`
-  de cada conta. Pegue o `refresh_token` de cada conta conectada — ele fica
-  só no banco (criptografado), então a forma mais simples é gerar via o
-  mesmo fluxo OAuth manualmente (rclone, ou o notebook que você já tinha)
-  pra cada conta do pool, ou usar o `/admin/drives/<id>/connect-google` e
-  depois consultar o valor no banco (peça ajuda se for esse o caminho).
-- **`CACHE_TTL_SECONDS`** (opcional, padrão 6h) — quanto tempo os bytes
-  ficam cacheados na borda da Cloudflare. É essa parte, não o pool de
-  contas, que reduz os "muitos acessos" no arquivo.
+Antes existiam duas cópias do mesmo `refresh_token` — uma no banco, outra no
+secret `ACCOUNTS` do Worker — e nada mantinha as duas em sincronia.
+Reconectar uma conta em `/admin/drives` grava um token novo no banco e deixa
+o do Worker pra trás; a partir daí o Worker falha o refresh com
+`invalid_grant` e **todo** request proxiado vira 502, enquanto com o proxy
+desligado continua tudo funcionando. Foi exatamente isso que aconteceu.
 
-O worker mudou de sintaxe (Service Worker → ES Modules com `export default`)
-— confira se o seu `wrangler.toml`/dashboard está configurado como Module,
-que é o padrão em projetos novos.
+### Configuração
+
+Na aplicação (Vercel → Environment Variables):
+
+- **`PROXY_SHARED_SECRET`** — qualquer string aleatória. Gere com
+  `python -c "import secrets; print(secrets.token_hex(32))"`. Sem ela, o
+  endpoint `/internal/drive-token/<id>` responde 503.
+
+No Worker (Settings → Variables):
+
+- **`TOKEN_ENDPOINT`** (texto) — `https://<seu-addon>/internal/drive-token`.
+  Já vem preenchido no `wrangler.toml`.
+- **`TOKEN_ENDPOINT_SECRET`** (Secret) — o mesmo valor de
+  `PROXY_SHARED_SECRET`. Defina com
+  `npx wrangler secret put TOKEN_ENDPOINT_SECRET`.
+
+Com `TOKEN_ENDPOINT` definido, o `ACCOUNTS` deixa de ser lido e pode ser
+apagado. Ele continua funcionando como fallback pra quem ainda não migrou —
+`/admin/drives/worker-config` gera o JSON.
+
+Não existe mais `CACHE_TTL_SECONDS`: o cache de borda foi removido porque a
+Cloudflare não guarda respostas `206 Partial Content`, que é o que todo
+request de vídeo com `Range` recebe.
+
+### Deploy
+
+O deploy da Vercel **não** publica o Worker — são dois lugares separados, e
+editar o código pelo dashboard foi como o publicado passou a divergir do
+repositório. Agora:
+
+- Todo push na `main` que mexa em `cf_proxy.js` ou `wrangler.toml` publica o
+  Worker via GitHub Actions (`.github/workflows/deploy-worker.yml`). Precisa
+  do secret `CLOUDFLARE_API_TOKEN` no repositório (Cloudflare → My Profile →
+  API Tokens → template *Edit Cloudflare Workers*).
+- Na mão, quando precisar: `npx wrangler deploy`.
+
+Secrets do Worker não são afetados por deploy — sobrevivem sem precisar
+reconfigurar.
+
+### Testes
+
+- `python -m pytest -q` — addon
+- `node --test tests/cf_proxy.test.mjs` — Worker (roda fora da Cloudflare,
+  com `fetch` stubado)
+
+Os dois rodam no CI a cada push e PR.
 
 ## O que eu não fiz
 

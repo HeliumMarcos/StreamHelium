@@ -56,6 +56,11 @@ variables that change its behavior:
   `cf_proxy.js`). When set, playback URLs are served through the proxy
   instead of directly through the Google Drive API. Useful if you want to
   avoid exposing your own OAuth access token to the Stremio client.
+* `PROXY_SHARED_SECRET` — enables `/internal/drive-token/<drive_account_id>`,
+  which hands the Worker a short-lived Drive access token so it doesn't have
+  to keep its own copy of the refresh tokens. Set the same value as the
+  Worker's `TOKEN_ENDPOINT_SECRET`. Unset, the endpoint answers 503 and the
+  Worker falls back to its `ACCOUNTS` secret. See `SETUP_POOL.md`.
 
 ### Customizing the addon manifest
 
