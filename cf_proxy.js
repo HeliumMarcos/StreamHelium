@@ -5,10 +5,27 @@
 // without a proper manual Range-slicing implementation against the Cache
 // API - not done here, to keep playback reliable.
 //
-// Set the ACCOUNTS environment variable (Cloudflare dashboard -> Workers ->
-// your worker -> Settings -> Variables -> add as a Secret, or via
-// `wrangler secret put ACCOUNTS`) to a JSON object mapping drive_account_id
-// (the same UUID shown in /admin/drives) -> its credentials:
+// Deploy with `npx wrangler deploy` (see wrangler.toml), or let the
+// deploy-worker GitHub Action do it on every push to main that touches
+// this file. Editing the code in the Cloudflare dashboard works too, but
+// then what's live silently stops matching what's in the repo.
+//
+// == Credentials ==
+//
+// Preferred: point the Worker at the addon and let it mint tokens.
+//
+//   TOKEN_ENDPOINT         (var)    https://<addon>/internal/drive-token
+//   TOKEN_ENDPOINT_SECRET  (secret) same value as the addon's
+//                                   PROXY_SHARED_SECRET env var
+//
+// The addon already holds every pool account's refresh token in Postgres,
+// so this keeps that credential in one place. The alternative below keeps
+// a second copy here, which is exactly what drifted out of sync before and
+// turned every proxied request into a 502.
+//
+// Fallback (used only when TOKEN_ENDPOINT is unset): the ACCOUNTS secret,
+// a JSON object mapping drive_account_id (the UUID shown in /admin/drives)
+// to its credentials. /admin/drives/worker-config generates it for you.
 //
 //   {
 //     "11111111-1111-1111-1111-111111111111": {
@@ -25,6 +42,7 @@ function getAccounts(env) {
   try {
     accountsCache = JSON.parse(env.ACCOUNTS || "{}")
   } catch (e) {
+    console.error("ACCOUNTS is not valid JSON - falling back to no accounts")
     accountsCache = {}
   }
   return accountsCache
@@ -34,6 +52,16 @@ function getAccounts(env) {
 // isolate stays warm - a cold isolate just re-fetches a new token, which is
 // cheap and normal.
 const tokenCache = new Map()
+
+// Carries the status the client should see, so a misconfigured account
+// reads as 404 and a broken credential as 502 instead of everything
+// collapsing into one opaque error.
+class TokenError extends Error {
+  constructor(message, status) {
+    super(message)
+    this.status = status
+  }
+}
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -85,28 +113,31 @@ async function handleRequest(request, env) {
 }
 
 async function streamFile(env, request, accountId, fileId) {
-  const accounts = getAccounts(env)
-  const credentials = accounts[accountId]
-  if (!credentials) {
-    return new Response(`404 Unknown account: ${accountId}`, { status: 404 })
-  }
-
   const fetchURL = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`
   const range = request.headers.get("Range")
 
   let resp
   try {
-    resp = await fetchFromDrive(fetchURL, accountId, credentials, range)
+    resp = await fetchFromDrive(fetchURL, env, accountId, range)
     // A cached access token can be revoked (or the account re-authorized)
     // while this isolate is still warm, and the cache entry would keep
     // serving the dead token until the isolate is recycled. Drop it and
     // retry once with a fresh one instead of failing playback.
     if (resp.status === 401) {
       tokenCache.delete(accountId)
-      resp = await fetchFromDrive(fetchURL, accountId, credentials, range)
+      resp = await fetchFromDrive(fetchURL, env, accountId, range)
     }
   } catch (e) {
-    return new Response(`502 ${e.message}`, { status: 502 })
+    // Without this the only trace of a credential problem in the Workers
+    // logs is a bare 502 with no reason attached.
+    console.error(`Account ${accountId}: ${e.message}`)
+    return new Response(`${e.status || 502} ${e.message}`, {
+      status: e.status || 502,
+    })
+  }
+
+  if (resp.status >= 400) {
+    console.error(`Account ${accountId}: Drive returned ${resp.status} for file ${fileId}`)
   }
 
   // Build the response headers explicitly instead of copying everything
@@ -131,8 +162,8 @@ async function streamFile(env, request, accountId, fileId) {
   return new Response(resp.body, { status: resp.status, headers })
 }
 
-async function fetchFromDrive(fetchURL, accountId, credentials, range) {
-  const accessToken = await getAccessToken(accountId, credentials)
+async function fetchFromDrive(fetchURL, env, accountId, range) {
+  const accessToken = await getAccessToken(accountId, env)
 
   // Plain pass-through: forward the client's Range header to Google as-is.
   // No caching here - Cloudflare never stores 206 Partial Content
@@ -152,22 +183,59 @@ async function fetchFromDrive(fetchURL, accountId, credentials, range) {
 
   // Only send Range when the client actually asked for one. Setting it
   // unconditionally used to send a literal empty `Range:` header on every
-  // request that arrived without one, and Google rejects that as malformed
-  // instead of ignoring it - so the very first request of a playback
-  // session failed and the video never started. Stremio hid the bug
-  // because its streaming server always opens with `Range: bytes=0-`;
-  // players that fetch the URL directly (Nuvio, and ExoPlayer generally)
-  // send no Range header when starting from byte 0, so they hit it every
-  // time.
+  // request that arrived without one, which is malformed.
   if (range) headers.Range = range
 
   return fetch(fetchURL, { method: "GET", headers })
 }
 
-async function getAccessToken(accountId, credentials) {
+async function getAccessToken(accountId, env) {
   const cached = tokenCache.get(accountId)
   if (cached && cached.expires_at > Date.now()) {
     return cached.access_token
+  }
+
+  const token = env.TOKEN_ENDPOINT
+    ? await tokenFromAddon(accountId, env)
+    : await tokenFromRefreshToken(accountId, env)
+
+  tokenCache.set(accountId, {
+    access_token: token.access_token,
+    // Refresh 60s early so a request never races an expiring token.
+    expires_at: Date.now() + (token.expires_in - 60) * 1000,
+  })
+  return token.access_token
+}
+
+async function tokenFromAddon(accountId, env) {
+  if (!env.TOKEN_ENDPOINT_SECRET) {
+    throw new TokenError("TOKEN_ENDPOINT is set but TOKEN_ENDPOINT_SECRET is not", 500)
+  }
+
+  const url = `${env.TOKEN_ENDPOINT.replace(/\/$/, "")}/${encodeURIComponent(accountId)}`
+  const resp = await fetch(url, {
+    headers: { Authorization: `Bearer ${env.TOKEN_ENDPOINT_SECRET}` },
+  })
+
+  if (resp.status === 404) {
+    throw new TokenError(`Unknown or disconnected account ${accountId}`, 404)
+  }
+  if (!resp.ok) {
+    const body = (await resp.text()).slice(0, 200)
+    throw new TokenError(`Addon token endpoint returned ${resp.status}: ${body}`, 502)
+  }
+
+  const data = await resp.json()
+  if (!data.access_token) {
+    throw new TokenError("Addon token endpoint returned no access_token", 502)
+  }
+  return { access_token: data.access_token, expires_in: data.expires_in || 300 }
+}
+
+async function tokenFromRefreshToken(accountId, env) {
+  const credentials = getAccounts(env)[accountId]
+  if (!credentials) {
+    throw new TokenError(`Unknown account ${accountId}`, 404)
   }
 
   const resp = await fetch("https://oauth2.googleapis.com/token", {
@@ -182,15 +250,12 @@ async function getAccessToken(accountId, credentials) {
   })
   const data = await resp.json()
   if (!data.access_token) {
-    throw new Error(`Token refresh failed for account ${accountId}: ${JSON.stringify(data)}`)
+    // `invalid_grant` here almost always means the copy of the refresh
+    // token in ACCOUNTS is stale - the account was re-authorized and only
+    // the addon's database got the new one.
+    throw new TokenError(`Token refresh failed: ${JSON.stringify(data)}`, 502)
   }
-
-  tokenCache.set(accountId, {
-    access_token: data.access_token,
-    // Refresh 60s early so a request never races an expiring token.
-    expires_at: Date.now() + (data.expires_in - 60) * 1000,
-  })
-  return data.access_token
+  return data
 }
 
 export default {
@@ -198,6 +263,7 @@ export default {
     try {
       return await handleRequest(request, env)
     } catch (e) {
+      console.error(`Unhandled: ${e.stack || e.message}`)
       return new Response(`500 ${e.message}`, { status: 500 })
     }
   },

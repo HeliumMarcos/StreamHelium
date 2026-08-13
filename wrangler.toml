@@ -1,0 +1,24 @@
+name = "stream-helium-proxy"
+main = "cf_proxy.js"
+compatibility_date = "2026-07-28"
+workers_dev = true
+
+# Not a credential - this is the same identifier that appears in every
+# Cloudflare dashboard URL. The API token is what's secret, and it lives in
+# the CLOUDFLARE_API_TOKEN GitHub secret, never here.
+account_id = "351cda8f3188c85575206e1cf25bfd4e"
+
+# Sends console.log/console.error to Workers Logs. Without this, a failing
+# request shows up as a bare status code with no reason attached.
+[observability]
+enabled = true
+
+[vars]
+# Where the Worker asks for a Drive access token. The addon holds the
+# refresh tokens; the Worker holds none. Unset this to fall back to the
+# legacy ACCOUNTS secret.
+TOKEN_ENDPOINT = "https://catalogo.heliummarcos.com.br/internal/drive-token"
+
+# Secrets are NOT declared here and are NOT touched by `wrangler deploy` -
+# they persist across deploys. Set them once:
+#   npx wrangler secret put TOKEN_ENDPOINT_SECRET
