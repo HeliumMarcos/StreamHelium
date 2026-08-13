@@ -195,9 +195,24 @@ async function getAccessToken(accountId, env) {
     return cached.access_token
   }
 
-  const token = env.TOKEN_ENDPOINT
-    ? await tokenFromAddon(accountId, env)
-    : await tokenFromRefreshToken(accountId, env)
+  let token
+  if (env.TOKEN_ENDPOINT) {
+    try {
+      token = await tokenFromAddon(accountId, env)
+    } catch (e) {
+      // Don't take playback down while the addon side is still being set
+      // up, or is briefly unreachable: if the legacy secret is still
+      // configured, use it. Loudly, though - a silent fallback is how the
+      // two copies of this credential drifted apart unnoticed to begin
+      // with. Once ACCOUNTS is deleted there's nothing to fall back to and
+      // the error surfaces, which is the point.
+      if (!env.ACCOUNTS) throw e
+      console.error(`Token endpoint failed (${e.message}) - falling back to ACCOUNTS`)
+      token = await tokenFromRefreshToken(accountId, env)
+    }
+  } else {
+    token = await tokenFromRefreshToken(accountId, env)
+  }
 
   tokenCache.set(accountId, {
     access_token: token.access_token,

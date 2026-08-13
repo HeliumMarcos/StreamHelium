@@ -46,6 +46,7 @@ const LEGACY_ENV = {
   ACCOUNTS: JSON.stringify({
     "legacy-ok": { client_id: "c", client_secret: "s", refresh_token: "r" },
     "legacy-stale": { client_id: "c", client_secret: "s", refresh_token: "stale" },
+    "legacy-fallback": { client_id: "c", client_secret: "s", refresh_token: "r" },
   }),
 }
 
@@ -191,4 +192,27 @@ test("a stale refresh token in ACCOUNTS reports what Google said", async () => {
 
   assert.equal(resp.status, 502)
   assert.match(await resp.text(), /invalid_grant/)
+})
+
+test("a broken token endpoint falls back to ACCOUNTS instead of failing", async () => {
+  // Lets the Worker be pointed at the addon before the addon side is
+  // finished: playback keeps working off the old secret meanwhile.
+  const calls = stubFetch((url) => {
+    if (url.includes("drive-token")) return new Response("nope", { status: 500 })
+    if (url.includes("oauth2.googleapis.com")) {
+      return new Response(JSON.stringify({ access_token: "tok-legacy", expires_in: 3600 }), {
+        status: 200,
+      })
+    }
+    return new Response("V", { status: 200, headers: { "content-type": "video/mp4" } })
+  })
+
+  const resp = await worker.fetch(
+    new Request("https://w.dev/proxy/legacy-fallback/load/F/n.mkv"),
+    { ...ENV, ACCOUNTS: LEGACY_ENV.ACCOUNTS },
+  )
+
+  assert.equal(resp.status, 200)
+  assert.ok(calls.some((c) => c.url.includes("drive-token")))
+  assert.ok(calls.some((c) => c.url.includes("oauth2")))
 })

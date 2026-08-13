@@ -15,16 +15,11 @@ enabled = true
 
 [vars]
 # Where the Worker asks for a Drive access token, so it doesn't have to
-# keep its own copy of the refresh tokens. Set it to this addon's own
-# base URL - the same host you paste into Stremio, without the
-# /u/<id>/manifest.json part - followed by /internal/drive-token:
-#
-#   TOKEN_ENDPOINT = "https://SEU-ADDON/internal/drive-token"
-#
-# Left commented on purpose: with it unset the Worker falls back to the
-# legacy ACCOUNTS secret, so deploying before the addon side is ready
-# can't take playback down. Uncomment once /internal/drive-token/x on
-# that host answers 401.
+# keep its own copy of the refresh tokens. Safe to point here before the
+# addon side is finished: while this endpoint fails, the Worker logs the
+# reason and falls back to the ACCOUNTS secret, and only stops falling
+# back once ACCOUNTS is deleted.
+TOKEN_ENDPOINT = "https://stream-helium.vercel.app/internal/drive-token"
 
 # Secrets are NOT declared here and are NOT touched by `wrangler deploy` -
 # they persist across deploys. Set them once:

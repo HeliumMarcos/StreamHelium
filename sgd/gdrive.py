@@ -234,7 +234,11 @@ class GoogleDrive:
                 "refresh_token": self.token["refresh_token"],
                 "grant_type": "refresh_token",
             }
-            api_url = "https://www.googleapis.com/oauth2/v4/token"
+            # Google's current token endpoint. The old
+            # www.googleapis.com/oauth2/v4/token alias still answers, but
+            # this is the documented one and the same host the Worker and
+            # the OAuth callback already use.
+            api_url = "https://oauth2.googleapis.com/token"
             try:
                 oauth_resp = requests.post(api_url, json=body).json()
                 if "access_token" in oauth_resp:
