@@ -12,12 +12,14 @@ exact redirect URI registered:
 Env vars required: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET.
 """
 
+import hmac
 import logging
 import os
+import secrets
 from urllib.parse import urlencode
 
 import requests
-from flask import abort, redirect, request, Response, session
+from flask import abort, redirect, render_template, request, session
 
 from sgd import app, db
 from sgd.tenancy import _drive_cache
@@ -28,10 +30,7 @@ AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 SCOPE = "https://www.googleapis.com/auth/drive.readonly"
 
-# The OAuth `state` param round-trips through Google, so it's used to carry
-# which drive_account this authorization is for. Prefixed so a stray/replayed
-# state can't be confused with anything else.
-STATE_PREFIX = "drive:"
+OAUTH_STATE_SESSION_KEY = "drive_oauth_state"
 
 
 def _redirect_uri():
@@ -51,6 +50,12 @@ def admin_connect_drive_google(drive_account_id):
     if not client_id:
         abort(500, "GOOGLE_CLIENT_ID is not configured")
 
+    state = secrets.token_urlsafe(32)
+    session[OAUTH_STATE_SESSION_KEY] = {
+        "token": state,
+        "drive_account_id": str(drive_account_id),
+    }
+
     params = {
         "client_id": client_id,
         "redirect_uri": _redirect_uri(),
@@ -61,13 +66,23 @@ def admin_connect_drive_google(drive_account_id):
         # without this, re-authorizing an already-granted app can come back
         # with no refresh_token at all.
         "prompt": "consent",
-        "state": f"{STATE_PREFIX}{drive_account_id}",
+        "state": state,
     }
     return redirect(f"{AUTH_URL}?{urlencode(params)}")
 
 
 @app.route("/oauth/callback")
 def oauth_callback():
+    state = request.args.get("state") or ""
+    pending = session.pop(OAUTH_STATE_SESSION_KEY, None)
+    if (
+        not session.get("is_admin")
+        or not pending
+        or not state
+        or not hmac.compare_digest(pending.get("token", ""), state)
+    ):
+        abort(400, "Estado OAuth ausente, inválido ou expirado")
+
     error = request.args.get("error")
     if error:
         return _result_page(
@@ -77,11 +92,10 @@ def oauth_callback():
         )
 
     code = request.args.get("code")
-    state = request.args.get("state") or ""
-    if not code or not state.startswith(STATE_PREFIX):
+    if not code:
         abort(400)
 
-    drive_account_id = state[len(STATE_PREFIX):]
+    drive_account_id = pending["drive_account_id"]
     drive_row = db.get_drive_account(drive_account_id)
     if not drive_row:
         abort(404)
@@ -160,83 +174,21 @@ def connect_landing(invite_token):
     has_password = bool(user_row.get("password_hash"))
     password_error = request.args.get("password_error")
 
-    if has_password:
-        password_block = f"""
-    <p style="color:#34d399">✓ Senha definida.</p>
-    <p><a href="/login" style="color:#8b5cf6">Entrar com email e senha</a></p>
-    <details style="margin-top:.5rem">
-      <summary style="cursor:pointer;color:#a79fbb;font-size:.85rem">Trocar senha</summary>
-      {_password_form(invite_token, password_error)}
-    </details>
-"""
-    else:
-        password_block = f"""
-    <p style="color:#a79fbb">Defina uma senha pra poder entrar depois em
-    <a href="/login" style="color:#8b5cf6">/login</a> só com email e senha,
-    sem precisar guardar esse link.</p>
-    {_password_form(invite_token, password_error)}
-"""
-
-    html = f"""
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex">
-<title>Bem-vindo - Stream Helium</title>
-<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;
-            background:#0a0710;color:#ece8f4;font:16px/1.6 system-ui,sans-serif;
-            text-align:center;padding:24px">
-  <div style="max-width:28rem;width:100%">
-    <h1>Bem-vindo(a){', ' + user_row['display_name'] if user_row.get('display_name') else ''}</h1>
-    <p style="color:#a79fbb">Seu acesso já está pronto.</p>
-    <a href="/u/{user_row['id']}/"
-       style="display:inline-block;margin:1rem 0;padding:.6rem 1.2rem;border-radius:.5rem;
-              background:#8b5cf6;color:#fff;text-decoration:none">Ver instruções de instalação</a>
-    <hr style="border-color:#221a33;margin:1.5rem 0">
-    {password_block}
-  </div>
-</div>
-"""
-    return Response(html, mimetype="text/html; charset=utf-8")
-
-
-def _password_form(invite_token, password_error):
-    error_html = (
-        '<p style="color:#ef4444;font-size:.85rem">As senhas não coincidem '
-        'ou têm menos de 6 caracteres.</p>' if password_error else ""
+    return render_template(
+        "auth/invite.html",
+        user=user_row,
+        invite_token=invite_token,
+        has_password=has_password,
+        password_error=bool(password_error),
     )
-    return f"""
-    {error_html}
-    <form method="post" action="/connect/{invite_token}/set-password"
-          style="display:flex;flex-direction:column;gap:.5rem;max-width:16rem;margin:0 auto">
-      <input type="password" name="password" placeholder="Nova senha (mín. 6 caracteres)" required
-             style="padding:.5rem;border-radius:.4rem;border:1px solid #332844;background:#120c1c;color:#ece8f4">
-      <input type="password" name="confirm" placeholder="Confirmar senha" required
-             style="padding:.5rem;border-radius:.4rem;border:1px solid #332844;background:#120c1c;color:#ece8f4">
-      <button type="submit" style="padding:.5rem 1rem;border-radius:.4rem;border:none;
-              background:#8b5cf6;color:#fff;font-weight:600">Salvar senha</button>
-    </form>
-"""
 
 
 def _result_page(ok, title, message, link=None, link_label=None):
-    color = "#34d399" if ok else "#fbbf24"
-    link_html = (
-        f'<p><a href="{link}" style="color:#8b5cf6">{link_label}</a></p>'
-        if link else ""
+    return render_template(
+        "oauth/result.html",
+        ok=ok,
+        title=title,
+        message=message,
+        link=link,
+        link_label=link_label,
     )
-    html = f"""
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex">
-<title>{title}</title>
-<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;
-            background:#0a0710;color:#ece8f4;font:16px/1.6 system-ui,sans-serif;
-            text-align:center;padding:24px">
-  <div style="max-width:32rem">
-    <h1 style="color:{color}">{title}</h1>
-    <p style="color:#a79fbb">{message}</p>
-    {link_html}
-  </div>
-</div>
-"""
-    return Response(html, mimetype="text/html; charset=utf-8")

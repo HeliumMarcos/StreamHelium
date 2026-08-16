@@ -1,0 +1,21 @@
+{% extends "admin/base.html" %}
+{% block admin_content %}
+<h1>Configuração do Worker</h1>
+<div class="panel">
+  <h2>Recomendado: o Worker pede o token para cá</h2>
+  <p class="lede">Assim o <code>refresh_token</code> fica apenas no banco desta aplicação e as duas cópias não ficam fora de sincronia.</p>
+  <p><span class="dot {{ 'ok' if shared_secret_set else '' }}"></span>
+    {% if shared_secret_set %}<code>PROXY_SHARED_SECRET</code> está definido nesta aplicação.
+    {% else %}<code>PROXY_SHARED_SECRET</code> <strong>não</strong> está definido — o endpoint responde 503 enquanto isso.{% endif %}
+  </p>
+  <p>No Worker (Settings → Variables):</p>
+  <pre class="config-block">TOKEN_ENDPOINT        (texto)  {{ token_endpoint }}
+TOKEN_ENDPOINT_SECRET (secret) mesmo valor de PROXY_SHARED_SECRET</pre>
+  <p class="lede">Com <code>TOKEN_ENDPOINT</code> definido, o secret <code>ACCOUNTS</code> deixa de ser usado e pode ser apagado.</p>
+</div>
+<div class="panel">
+  <h2>Alternativa: credenciais dentro do Worker</h2>
+  <p class="lede">Cole o conteúdo abaixo como o secret <code>ACCOUNTS</code>. Ele contém segredos: não compartilhe e atualize sempre que reconectar uma conta.</p>
+  <pre class="config-block">{{ config_json }}</pre>
+</div>
+{% endblock %}

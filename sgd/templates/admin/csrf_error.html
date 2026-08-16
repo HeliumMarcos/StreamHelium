@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Página expirada — Stream Helium{% endblock %}
+{% block body %}
+<main id="conteudo" class="auth-card">
+  <h1>Página expirada</h1>
+  <p class="message warning" role="alert">A ação não foi enviada porque o token de segurança estava ausente ou expirou.</p>
+  <p class="lede">Nenhuma alteração foi realizada. Reabra o painel e tente novamente.</p>
+  <p><a class="button" href="{{ '/admin' if is_admin else '/admin/login' }}">Voltar ao painel</a></p>
+</main>
+{% endblock %}

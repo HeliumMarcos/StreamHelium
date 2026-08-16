@@ -1,0 +1,60 @@
+{% extends "admin/base.html" %}
+{% block admin_content %}
+<h1>Contas Drive</h1>
+<p class="lede">Todas devem apontar para a mesma pasta compartilhada. Novas contas de família são atribuídas automaticamente a quem tiver menos gente. <a href="/admin/drives/worker-config">Ver configuração do Worker →</a></p>
+
+{% if not cf_configured %}
+  <p class="lede warning-text">⚠️ <code>CF_PROXY_URL</code> não está configurada na Vercel — o controle só terá efeito depois que a variável for definida.</p>
+{% else %}
+  <div class="panel proxy-panel">
+    <div>
+      <div><span class="dot {{ 'ok' if proxy_on else '' }}"></span><strong>Proxy Cloudflare: {{ 'Ativado' if proxy_on else 'Desativado' }}</strong></div>
+      <div class="status-label">Quando desativado, todos recebem o vídeo diretamente da API do Google, sem cache e sem ocultar o token.</div>
+    </div>
+    <form method="post" action="/admin/settings/proxy/toggle" {% if proxy_on %}data-confirm="Desativar o proxy? Os vídeos usarão a API do Google diretamente."{% endif %}>
+      {% include "admin/_form.html" %}<button type="submit" class="{{ 'ghost' if proxy_on else '' }}">{{ 'Desativar' if proxy_on else 'Ativar' }}</button>
+    </form>
+  </div>
+{% endif %}
+
+<div class="panel">
+  <form id="create-drive" class="create" method="post" action="/admin/drives">
+    {% include "admin/_form.html" %}
+    <label>Nome da conta<input type="text" name="label" placeholder="Ex.: Drive 1" required></label>
+    <button type="submit">Adicionar</button>
+  </form>
+</div>
+
+<div class="panel">
+  <table>
+    <thead><tr><th>Conta</th><th>Status</th><th>Famílias</th><th>Ações</th></tr></thead>
+    <tbody>
+    {% for drive in drives %}
+      <tr>
+        <td data-label="Conta">{{ drive.label }}</td>
+        <td data-label="Status">
+          <span class="dot {{ drive.status_dot }}"></span>{{ drive.status_label }}
+          {% if drive.account %}<div class="status-label">{{ drive.account }}</div>{% endif %}
+          {% if drive.usage_label %}<div class="status-label">{{ drive.usage_label }}</div>{% endif %}
+          {% if drive.usage_pct is not none %}<div class="usage-track"><div class="usage-bar" style="width:{{ drive.usage_pct }}%"></div></div>{% endif %}
+          {% if drive.error %}<div class="status-label error-text">Sem resposta do Drive ({{ drive.error }})</div>{% endif %}
+        </td>
+        <td data-label="Famílias">{{ drive.assigned_count }}</td>
+        <td data-label="Ações"><div class="row-actions">
+          <a href="/admin/drives/{{ drive.id }}/connect-google" class="btn-link">{{ drive.connect_label }}</a>
+          <form class="inline" method="post" action="/admin/drives/{{ drive.id }}/toggle">
+            {% include "admin/_form.html" %}<button type="submit" class="ghost sm">{{ drive.toggle_label }}</button>
+          </form>
+          <form class="inline" method="post" action="/admin/drives/{{ drive.id }}/delete"
+                data-confirm="Remover {{ drive.label }}? As {{ drive.assigned_count }} famílias serão redistribuídas entre as demais contas.">
+            {% include "admin/_form.html" %}<button type="submit" class="danger sm">Remover</button>
+          </form>
+        </div></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4"><div class="empty-state"><strong>Nenhuma conta Drive</strong><span>Adicione uma conta acima e conecte-a ao Google.</span></div></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

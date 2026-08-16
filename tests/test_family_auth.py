@@ -34,6 +34,17 @@ def test_login_page_renders(client):
     assert "Entrar" in resp.get_data(as_text=True)
 
 
+def test_login_page_has_accessible_document_and_fields(client):
+    body = client.get("/login").get_data(as_text=True)
+
+    assert "<!doctype html>" in body.lower()
+    assert '<html lang="pt-BR">' in body
+    assert '<label for="email">' in body
+    assert 'autocomplete="email"' in body
+    assert '<label for="password">' in body
+    assert 'autocomplete="current-password"' in body
+
+
 def test_login_wrong_password(client, monkeypatch):
     monkeypatch.setattr("sgd.db.get_user_by_email", lambda email: _user_row())
 
@@ -175,6 +186,18 @@ def test_set_password_success_calls_db(client, monkeypatch):
     assert resp.headers["Location"] == "/connect/tok123"
     assert len(calls) == 1
     assert calls[0][0] == USER_ID
+
+
+def test_invite_password_form_is_labeled_and_describes_requirements(client, monkeypatch):
+    monkeypatch.setattr(
+        "sgd.db.get_user_by_invite_token", lambda token: _user_row(password_hash=None)
+    )
+
+    body = client.get("/connect/tok123").get_data(as_text=True)
+
+    assert '<label for="new-password">' in body
+    assert 'minlength="6"' in body
+    assert 'autocomplete="new-password"' in body
 
 
 # --- build_account_status (pure function) ---------------------------------

@@ -1,3 +1,4 @@
+import re
 import uuid
 
 import pytest
@@ -16,7 +17,15 @@ def client():
 
 
 def _login(client):
-    return client.post("/admin/login", data={"password": "test-admin-password"})
+    page = client.get("/admin/login").get_data(as_text=True)
+    token = re.search(r'name="csrf_token" value="([^"]+)"', page).group(1)
+    resp = client.post(
+        "/admin/login",
+        data={"password": "test-admin-password", "csrf_token": token},
+    )
+    with client.session_transaction() as sess:
+        client.environ_base["HTTP_X_CSRF_TOKEN"] = sess["admin_csrf_token"]
+    return resp
 
 
 # --- TMDB key pool (admin) -------------------------------------------------
@@ -53,10 +62,11 @@ def test_admin_create_tmdb_key(client, monkeypatch):
     assert calls == [("Chave 2", "xyz789")]
 
 
-def test_admin_create_tmdb_key_requires_both_fields(client):
+def test_admin_create_tmdb_key_reports_missing_field(client):
     _login(client)
     resp = client.post("/admin/tmdb", data={"label": "Sem chave"})
-    assert resp.status_code == 400
+    assert resp.status_code == 302
+    assert resp.headers["Location"] == "/admin/tmdb"
 
 
 def test_admin_toggle_tmdb_key(client, monkeypatch):
@@ -179,7 +189,10 @@ def test_stream_blocked_when_device_limit_reached(client, monkeypatch):
     resp = client.get(f"/u/{TEST_USER_ID}/stream/movie/tt0111161.json")
 
     assert resp.status_code == 200
-    assert resp.get_json() == {"streams": []}
+    body = resp.get_json()
+    assert len(body["streams"]) == 1
+    assert "Outro dispositivo" in body["streams"][0]["title"]
+    assert body["streams"][0]["externalUrl"].startswith("https://wa.me/")
 
 
 def test_stream_allowed_when_device_matches(client, monkeypatch):

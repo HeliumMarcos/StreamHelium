@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Login administrativo — Stream Helium{% endblock %}
+{% block body %}
+<main id="conteudo" class="auth-card">
+  <h1>🎬 Stream Helium · admin</h1>
+  <p class="lede">Área restrita de administração.</p>
+  {% if error %}<div class="message error" role="alert">{{ error }}</div>{% endif %}
+  <form method="post" class="stack">
+    {% include "admin/_form.html" %}
+    <div class="field">
+      <label for="admin-password">Senha administrativa</label>
+      <input id="admin-password" type="password" name="password"
+             autocomplete="current-password" required autofocus>
+    </div>
+    <button type="submit">Entrar</button>
+  </form>
+</main>
+{% endblock %}
