@@ -1,0 +1,138 @@
+{% extends "admin/base.html" %}
+{% block admin_content %}
+<h1>Painel</h1>
+<p class="lede">Visão geral do sistema e gestão das contas de família.</p>
+
+<div class="stats">
+  <div class="stat"><div class="n">{{ overview.family.total }}</div><div class="l">Contas de família</div></div>
+  <div class="stat ok"><div class="n">{{ overview.family.active_count }}</div><div class="l">Ativas</div></div>
+  <div class="stat warn"><div class="n">{{ overview.family.expired_count }}</div><div class="l">Expiradas</div></div>
+  <div class="stat"><div class="n">{{ overview.drives.connected }}/{{ overview.drives.total }}</div><div class="l">Drives conectados</div></div>
+  <div class="stat"><div class="n">{{ overview.tmdb.active_count }}/{{ overview.tmdb.total }}</div><div class="l">Chaves TMDB ativas</div></div>
+  <div class="stat"><div class="n">{{ overview.devices.total }}</div><div class="l">Dispositivos ativos (4h)</div></div>
+</div>
+
+<h2>Contas de família</h2>
+{% if not drive_accounts %}
+  <p class="lede warning-text">⚠️ Nenhuma conta Drive no pool ainda — cadastre uma em
+    <a href="/admin/drives">Contas Drive</a> antes de criar contas de família.</p>
+{% endif %}
+
+<div class="panel">
+  <form id="create-user" class="create" method="post" action="/admin/users">
+    {% include "admin/_form.html" %}
+    <label>E-mail
+      <input type="email" name="email" placeholder="email@exemplo.com" autocomplete="email" required>
+    </label>
+    <label>Nome
+      <input type="text" name="display_name" placeholder="Opcional" autocomplete="name">
+    </label>
+    <label>Validade em dias
+      <input type="number" name="expires_in_days" placeholder="Sem prazo" min="1">
+    </label>
+    <label>Conta Drive
+      <select name="drive_account_id">
+        <option value="">Automático (equilibrar)</option>
+        {% for drive in connected_drives %}<option value="{{ drive.id }}">{{ drive.label }}</option>{% endfor %}
+      </select>
+    </label>
+    <button type="submit">Adicionar</button>
+  </form>
+</div>
+
+<div class="panel">
+  <table>
+    <thead><tr><th>Conta</th><th>Drive</th><th>Dispositivo</th><th>Senha</th><th>Expira</th><th>Convite / Ações</th></tr></thead>
+    <tbody>
+    {% for user in users %}
+      <tr>
+        <td data-label="Conta">
+          <span class="dot {{ user.status_dot }}"></span>{{ user.email }}
+          {% if user.display_name %}<div class="name">{{ user.display_name }}</div>{% endif %}
+          <div class="status-label">{{ user.status_label }}</div>
+          <details class="edit-details">
+            <summary>Editar</summary>
+            <form class="edit-form" method="post" action="/admin/users/{{ user.id }}/edit">
+              {% include "admin/_form.html" %}
+              <label>E-mail
+                <input type="email" name="email" value="{{ user.email }}" autocomplete="email" required>
+              </label>
+              <label>Nome
+                <input type="text" name="display_name" value="{{ user.display_name }}" autocomplete="name">
+              </label>
+              <label>Expira em
+                <input type="date" name="expires_at" value="{{ user.expires_value }}">
+              </label>
+              <label class="check-label">
+                <input type="checkbox" name="no_expiration" {% if not user.expires_value %}checked{% endif %}>
+                Sem prazo de expiração
+              </label>
+              <button type="submit" class="sm">Salvar</button>
+            </form>
+          </details>
+        </td>
+        <td data-label="Drive">
+          {{ user.drive_label }}{% if user.drive_account_pinned %} <span class="badge">📌 fixado</span>{% endif %}
+          <form class="drive-assignment" method="post" action="/admin/users/{{ user.id }}/reassign">
+            {% include "admin/_form.html" %}
+            <label class="sr-only" for="drive-{{ user.id }}">Conta Drive</label>
+            <select id="drive-{{ user.id }}" name="drive_account_id">
+              {% for drive in connected_drives %}
+                <option value="{{ drive.id }}" {% if drive.id|string == user.current_drive_id %}selected{% endif %}>{{ drive.label }}</option>
+              {% endfor %}
+            </select>
+            <button type="submit" class="ghost sm" title="Fixa nessa conta">Fixar</button>
+          </form>
+          {% if user.drive_account_pinned %}
+            <form class="inline" method="post" action="/admin/users/{{ user.id }}/auto-assign">
+              {% include "admin/_form.html" %}
+              <button type="submit" class="ghost sm" title="Volta a ser rebalanceado automaticamente">Auto</button>
+            </form>
+          {% endif %}
+        </td>
+        <td data-label="Dispositivo">
+          <span class="dot {{ user.device.dot }}"></span><span class="{{ 'muted' if not user.device.active else '' }}">{{ user.device.label }}</span>
+          {% if user.device.seen %}<br><span class="status-label">visto {{ user.device.seen }}</span>{% endif %}
+          {% if user.device.active %}
+            <br><form class="inline" method="post" action="/admin/users/{{ user.id }}/free-device">
+              {% include "admin/_form.html" %}<button type="submit" class="ghost sm">Liberar</button>
+            </form>
+          {% endif %}
+        </td>
+        <td data-label="Senha">
+          {{ "definida" if user.has_password else "—" }}
+          {% if user.has_password %}
+            <br><form class="inline" method="post" action="/admin/users/{{ user.id }}/reset-password"
+                     data-confirm="Resetar a senha? A pessoa precisará definir uma nova pelo link de convite.">
+              {% include "admin/_form.html" %}<button type="submit" class="ghost sm">Resetar</button>
+            </form>
+          {% endif %}
+        </td>
+        <td data-label="Expira"><span class="{{ user.expiry.class_name }}">{{ user.expiry.label }}</span></td>
+        <td data-label="Convite / Ações">
+          <div class="invite-actions">
+            <a class="invite-link" href="{{ user.invite_url }}" target="_blank" rel="noopener noreferrer"><code>{{ user.invite_url }}</code></a>
+            <button type="button" class="ghost sm copy-button" data-copy-url="{{ user.invite_url }}">Copiar link</button>
+          </div>
+          <div class="row-actions">
+            <form class="inline" method="post" action="/admin/users/{{ user.id }}/renew">
+              {% include "admin/_form.html" %}<input type="hidden" name="days" value="30">
+              <button type="submit" class="ghost sm" title="Renovar por mais 30 dias">+30d</button>
+            </form>
+            <form class="inline" method="post" action="/admin/users/{{ user.id }}/toggle">
+              {% include "admin/_form.html" %}<button type="submit" class="ghost sm">{{ user.toggle_label }}</button>
+            </form>
+            <form class="inline" method="post" action="/admin/users/{{ user.id }}/delete"
+                  data-confirm="Remover {{ user.email }}? A URL do addon deixará de funcionar imediatamente.">
+              {% include "admin/_form.html" %}<button type="submit" class="danger sm">Remover</button>
+            </form>
+          </div>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6"><div class="empty-state"><strong>Nenhuma conta de família</strong><span>Preencha o formulário acima para criar o primeiro acesso.</span></div></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Bem-vindo — Stream Helium{% endblock %}
+{% block body %}
+<main id="conteudo" class="auth-card">
+  <h1>Bem-vindo(a){% if user.display_name %}, {{ user.display_name }}{% endif %}</h1>
+  <p class="lede">Seu acesso já está pronto.</p>
+  <p><a class="button" href="/u/{{ user.id }}/" style="display:inline-flex;align-items:center;text-decoration:none">Ver instruções de instalação</a></p>
+
+  <hr style="border:0;border-top:1px solid var(--border);margin:1.5rem 0">
+  {% if has_password %}
+    <p class="message success" role="status">Senha definida.</p>
+    <p><a href="/login">Entrar com e-mail e senha</a></p>
+    <details>
+      <summary>Trocar senha</summary>
+      <div style="margin-top:1rem">{% include "auth/_password_form.html" %}</div>
+    </details>
+  {% else %}
+    <p class="lede">Defina uma senha para entrar depois sem precisar guardar este link.</p>
+    {% include "auth/_password_form.html" %}
+  {% endif %}
+</main>
+{% endblock %}

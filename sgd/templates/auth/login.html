@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Entrar — Stream Helium{% endblock %}
+{% block body %}
+<main id="conteudo" class="auth-card">
+  <h1>🎬 Stream Helium</h1>
+  <p class="lede">Entre para acessar as instruções do seu add-on.</p>
+
+  {% if error %}
+    <div class="message error" role="alert">{{ error }}</div>
+  {% endif %}
+  {% if account_unavailable %}
+    <p class="hint"><a href="{{ support_url }}" target="_blank" rel="noopener">Fale com o administrador no WhatsApp</a></p>
+  {% endif %}
+
+  <form method="post" class="stack">
+    <div class="field">
+      <label for="email">E-mail</label>
+      <input id="email" type="email" name="email" value="{{ email }}"
+             autocomplete="email" required autofocus>
+    </div>
+    <div class="field">
+      <label for="password">Senha</label>
+      <input id="password" type="password" name="password"
+             autocomplete="current-password" required>
+    </div>
+    <button type="submit">Entrar</button>
+  </form>
+
+  <p class="hint auth-actions">Ainda não definiu uma senha? Use o link de convite que você recebeu.</p>
+  <p class="quiet-link"><a href="/admin/login">Sou administrador</a></p>
+</main>
+{% endblock %}

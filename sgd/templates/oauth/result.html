@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} — Stream Helium{% endblock %}
+{% block body %}
+<main id="conteudo" class="auth-card">
+  <h1 style="color:{{ '#34d399' if ok else '#fbbf24' }}">{{ title }}</h1>
+  <p class="lede">{{ message }}</p>
+  {% if link %}<p><a href="{{ link }}">{{ link_label }}</a></p>{% endif %}
+</main>
+{% endblock %}

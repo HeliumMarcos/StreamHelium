@@ -7,6 +7,7 @@ from sgd import tenancy
 from sgd.meta import MetadataNotFound, Meta
 from sgd.streams import Streams
 from sgd.utils import split_stream_id, hr_size
+from sgd.branding import admin_whatsapp_link
 from json import dumps
 from flask import g, jsonify, abort, Response, redirect, request
 from datetime import datetime
@@ -127,7 +128,10 @@ def _load_tenant_if_scoped():
         return
     if not VALID_USER_ID.match(user_id):
         abort(404)
-    tenancy.load_tenant(user_id)
+    if request.endpoint == "user_landing":
+        tenancy.load_user_landing(user_id)
+    else:
+        tenancy.load_tenant(user_id)
 
 
 @app.route("/")
@@ -237,6 +241,7 @@ def user_landing(user_id):
         connect_url=f"/connect/{g.user['invite_token']}" if g.user.get("invite_token") else None,
         account_status=build_account_status(g.user),
         logged_in=session.get("family_user_id") == user_id,
+        service_available=g.gdrive is not None,
     )
     resp = Response(page, mimetype="text/html; charset=utf-8")
     resp.headers["X-Robots-Tag"] = "noindex"
@@ -258,7 +263,18 @@ def addon_stream(user_id, stream_type, stream_id):
 
     if not _check_device_limit(user_id, request):
         logger.info("Blocked stream request for user %s - device limit reached", user_id)
-        resp = jsonify({"streams": []})
+        resp = jsonify({
+            "streams": [{
+                "name": "⚠️ Stream Helium",
+                "title": (
+                    "Outro dispositivo está usando esta conta. Aguarde até 4 horas "
+                    "sem reprodução ou peça ao administrador para liberar o acesso."
+                ),
+                "externalUrl": admin_whatsapp_link(
+                    "Olá! Preciso liberar o dispositivo da minha conta no Stream Helium."
+                ),
+            }]
+        })
         return common_headers(resp)
 
     try:

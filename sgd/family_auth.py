@@ -12,42 +12,22 @@ rather remember an email+password than bookmark a long URL.
 import logging
 from datetime import datetime, timezone
 
-from flask import abort, redirect, request, session, Response
+from flask import abort, redirect, render_template, request, session
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from sgd import app, db
-from sgd.branding import admin_whatsapp_html
+from sgd.branding import admin_whatsapp_link
 
 logger = logging.getLogger(__name__)
 
 MIN_PASSWORD_LENGTH = 6
 
 
-def _page(body, title="Stream Helium"):
-    html = f"""
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex">
-<title>{title}</title>
-<style>
-  body {{ margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
-          background:#0a0710; color:#ece8f4; font:15px/1.6 system-ui,sans-serif; padding:24px; }}
-  .box {{ max-width:22rem; width:100%; text-align:center; }}
-  input {{ width:100%; padding:.6rem; border-radius:.4rem; border:1px solid #332844;
-           background:#120c1c; color:#ece8f4; margin-bottom:.6rem; box-sizing:border-box; }}
-  button {{ width:100%; padding:.6rem; border-radius:.4rem; border:none; cursor:pointer;
-            background:#8b5cf6; color:#fff; font-weight:600; }}
-  a {{ color:#22d3ee; }}
-  .error {{ color:#ef4444; }}
-</style>
-<div class="box">{body}</div>
-"""
-    return Response(html, mimetype="text/html; charset=utf-8")
-
-
 @app.route("/login", methods=["GET", "POST"])
 def family_login():
-    error = ""
+    error = None
+    account_unavailable = False
+    email = ""
     if request.method == "POST":
         email = (request.form.get("email") or "").strip().lower()
         password = request.form.get("password") or ""
@@ -62,28 +42,18 @@ def family_login():
             session["family_user_id"] = str(user_row["id"])
             return redirect("/home")
         elif valid:
-            error = (
-                '<p class="error">Sua conta está inativa ou expirada.</p>'
-                f'<p style="font-size:.85rem">{admin_whatsapp_html()}</p>'
-            )
+            error = "Sua conta está inativa ou expirada."
+            account_unavailable = True
         else:
-            error = '<p class="error">Email ou senha incorretos.</p>'
+            error = "E-mail ou senha incorretos."
 
-    return _page(f"""
-      <h1>🎬 Stream Helium</h1>
-      {error}
-      <form method="post">
-        <input type="email" name="email" placeholder="Seu email" required autofocus>
-        <input type="password" name="password" placeholder="Sua senha" required>
-        <button type="submit">Entrar</button>
-      </form>
-      <p style="margin-top:1rem;color:#a79fbb;font-size:.85rem">
-        Ainda não definiu uma senha? Use o link de convite que você recebeu.
-      </p>
-      <p style="margin-top:1.5rem;color:#5f5670;font-size:.78rem">
-        <a href="/admin/login" style="color:#5f5670">Sou administrador</a>
-      </p>
-    """, title="Entrar - Stream Helium")
+    return render_template(
+        "auth/login.html",
+        error=error,
+        account_unavailable=account_unavailable,
+        support_url=admin_whatsapp_link("Preciso de ajuda com meu acesso ao Stream Helium."),
+        email=email,
+    )
 
 
 @app.route("/logout", methods=["POST"])

@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from flask import g
@@ -102,6 +103,48 @@ def test_user_manifest_uses_base_manifest_fields(client, monkeypatch):
 def test_user_manifest_rejects_malformed_user_id(client):
     resp = client.get("/u/not-a-uuid/manifest.json")
     assert resp.status_code == 404
+
+
+def test_expired_user_landing_explains_status_instead_of_404(client, monkeypatch):
+    expired_user = _fake_user_row(
+        expires_at=datetime.now(timezone.utc) - timedelta(days=1)
+    )
+
+    def fake_load_user_landing(user_id):
+        g.user = expired_user
+        g.gdrive = None
+        return expired_user
+
+    monkeypatch.setattr("sgd.tenancy.load_user_landing", fake_load_user_landing)
+    monkeypatch.setattr("sgd.db.has_active_tmdb_key", lambda: True)
+
+    resp = client.get(f"/u/{TEST_USER_ID}/")
+
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "Instalação temporariamente indisponível" in body
+    assert "período de acesso desta conta terminou" in body
+    assert "stremio://" not in body
+
+
+def test_active_user_landing_has_semantic_document_and_correct_routes(client, monkeypatch):
+    active_user = _fake_user_row(expires_at=None)
+
+    def fake_load_user_landing(user_id):
+        g.user = active_user
+        g.gdrive = object()
+        return active_user
+
+    monkeypatch.setattr("sgd.tenancy.load_user_landing", fake_load_user_landing)
+    monkeypatch.setattr("sgd.db.has_active_tmdb_key", lambda: True)
+
+    body = client.get(f"/u/{TEST_USER_ID}/").get_data(as_text=True)
+
+    assert "<!doctype html>" in body.lower()
+    assert '<html lang="pt-BR">' in body
+    assert '<main id="conteudo">' in body
+    assert "Rotas utilizadas por esta conta" in body
+    assert "/u/&lt;seu-id&gt;/manifest.json" in body
 
 
 def test_user_health_reports_config_and_drive(client, monkeypatch):

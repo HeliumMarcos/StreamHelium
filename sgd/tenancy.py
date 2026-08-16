@@ -72,6 +72,27 @@ def drive_for_account(drive_account_id):
     return _get_drive_instance(str(drive_account_id))
 
 
+def load_user_landing(user_id):
+    """Loads enough context to explain an unavailable account.
+
+    Manifest, health and stream endpoints still require a fully active tenant,
+    but the human-facing landing page should not collapse an expired, disabled
+    or temporarily unassigned account into an opaque 404.
+    """
+    user_row = db.get_user(user_id)
+    if not user_row:
+        abort(404)
+
+    g.user = user_row
+    g.gdrive = None
+
+    drive_account_id = user_row.get("drive_account_id")
+    if db.is_effectively_active(user_row) and drive_account_id:
+        g.gdrive = _get_drive_instance(str(drive_account_id))
+
+    return user_row
+
+
 def load_tenant(user_id):
     """Called at the top of every /u/<user_id>/... route. Aborts the
     request (404) for unknown/inactive/expired/unassigned users rather than

@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='admin.css') }}">
+<script src="{{ url_for('static', filename='admin.js') }}" defer></script>
+{% endblock %}
+{% block body_class %}admin-page{% endblock %}
+{% block body %}
+<main id="conteudo" class="admin-main">
+  <header class="topbar">
+    <div class="brand">🎬 Stream Helium <span>· admin</span></div>
+    <nav aria-label="Seções administrativas">
+      {% for item in nav_items %}
+        <a class="nav-item{% if item.key == active %} active{% endif %}" href="{{ item.href }}"
+           {% if item.key == active %}aria-current="page"{% endif %}>{{ item.label }}</a>
+      {% endfor %}
+    </nav>
+  </header>
+
+  <div aria-live="polite">
+    {% for category, message in alerts %}
+      <div class="alert {{ category }}" role="status">{{ message }}</div>
+    {% endfor %}
+  </div>
+
+  <div id="admin-feedback" class="toast" role="status" aria-live="polite" hidden></div>
+
+  {% block admin_content %}{% endblock %}
+
+  <footer class="admin-footer">
+    <form method="post" action="/admin/logout">
+      {% include "admin/_form.html" %}
+      <button type="submit" class="ghost">Sair</button>
+    </form>
+  </footer>
+</main>
+{% endblock %}

@@ -15,6 +15,9 @@ from sgd.branding import admin_whatsapp_html
 
 PAGE = Template(
     """
+<!doctype html>
+<html lang="pt-BR">
+<head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
@@ -43,6 +46,13 @@ PAGE = Template(
     -webkit-font-smoothing: antialiased;
   }
   a { color: inherit; }
+  :where(a, button):focus-visible { outline: 3px solid var(--accent-2); outline-offset: 3px; }
+  .skip-link {
+    position: fixed; top: 10px; left: 10px; z-index: 20;
+    padding: 8px 12px; border-radius: 8px; background: #fff; color: #111;
+    transform: translateY(-160%);
+  }
+  .skip-link:focus { transform: translateY(0); }
 
   .bg {
     position: fixed;
@@ -129,6 +139,13 @@ PAGE = Template(
     color: var(--txt);
   }
   .btn-ghost:hover { background: rgba(255, 255, 255, .09); }
+  .access-notice {
+    max-width: 38rem; margin: 30px auto 14px; padding: 16px 18px;
+    border: 1px solid rgba(251, 191, 36, .38); border-radius: 14px;
+    background: rgba(251, 191, 36, .08); color: var(--txt-dim);
+  }
+  .access-notice strong { display: block; color: var(--warn); margin-bottom: 4px; }
+  .access-notice a { color: var(--accent-2); }
   .url {
     display: block; margin: 0 auto; max-width: 100%;
     overflow-x: auto; white-space: nowrap;
@@ -227,6 +244,7 @@ PAGE = Template(
     font-size: 13px; color: var(--accent-2); white-space: nowrap; width: 1%; padding-right: 18px;
   }
   table td:last-child { color: var(--txt-dim); }
+  table caption { text-align: left; color: var(--txt-dim); margin-bottom: 10px; }
 
   footer {
     margin-top: 56px; padding-top: 22px;
@@ -239,13 +257,19 @@ PAGE = Template(
     header { padding-top: 44px; }
     .btn { flex: 1 1 100%; justify-content: center; }
   }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  }
 </style>
+</head>
+<body>
+<a class="skip-link" href="#conteudo">Ir para o conteúdo</a>
 
 <div class="bg"></div>
 
 <div class="wrap">
   <header>
-    <img class="logo" src="$logo" alt="" onerror="this.style.display='none'">
+    <img class="logo" src="$logo" alt="Logotipo do $name" onerror="this.style.display='none'">
     <h1>$name</h1>
     <p class="tagline">$description</p>
     <div class="pills">
@@ -255,14 +279,11 @@ PAGE = Template(
       <span class="pill">Fonte: Google Drive</span>
     </div>
 
-    <div class="install">
-      <a class="btn btn-primary" href="$stremio_url">⬇️ Instalar no Stremio</a>
-      <button class="btn btn-ghost" id="copy" type="button">🔗 Copiar manifest</button>
-    </div>
-    <code class="url" id="manifest-url">$manifest_url</code>
+    $install_block
     $header_extra
   </header>
 
+  <main id="conteudo">
   <section>
     <h2>Status do sistema</h2>
     <div class="grid grid-2">
@@ -270,7 +291,7 @@ PAGE = Template(
       <div class="card">
         <h3><span class="dot" id="drive-dot"></span> Google Drive</h3>
         <div class="val" id="drive-val">Verificando…</div>
-        <div class="sub" id="drive-sub">Consultando a conta conectada</div>
+        <div class="sub" id="drive-sub" aria-live="polite">Consultando a conta conectada</div>
         <div class="bar"><i id="drive-bar"></i></div>
       </div>
     </div>
@@ -329,14 +350,18 @@ PAGE = Template(
     <h2>Endpoints</h2>
     <div class="card">
       <table>
-        <tr><td>/</td><td>Esta página</td></tr>
-        <tr><td>/manifest.json</td><td>Manifesto do add-on — é esta URL que você instala no Stremio</td></tr>
-        <tr><td>/stream/movie/&lt;id&gt;.json</td><td>Streams de um filme (ex.: <code>tt0111161</code> ou <code>tmdb:278</code>)</td></tr>
-        <tr><td>/stream/series/&lt;id&gt;.json</td><td>Streams de um episódio (ex.: <code>tt0903747:1:1</code>)</td></tr>
-        <tr><td>/health</td><td>Diagnóstico em JSON: Drive, cota, drives compartilhados e configuração</td></tr>
+        <caption>Rotas utilizadas por esta conta do add-on</caption>
+        <tbody>
+        <tr><td>/u/&lt;seu-id&gt;/</td><td>Esta página de instruções</td></tr>
+        <tr><td>/u/&lt;seu-id&gt;/manifest.json</td><td>Manifesto instalado no Stremio</td></tr>
+        <tr><td>/u/&lt;seu-id&gt;/stream/movie/&lt;id&gt;.json</td><td>Streams de um filme (ex.: <code>tt0111161</code> ou <code>tmdb:278</code>)</td></tr>
+        <tr><td>/u/&lt;seu-id&gt;/stream/series/&lt;id&gt;.json</td><td>Streams de um episódio (ex.: <code>tt0903747:1:1</code>)</td></tr>
+        <tr><td>/u/&lt;seu-id&gt;/health</td><td>Diagnóstico em JSON da conta e do Drive</td></tr>
+        </tbody>
       </table>
     </div>
   </section>
+  </main>
 
   <footer>
     <span>$name · v$version<span id="host"></span></span><br>
@@ -346,23 +371,29 @@ PAGE = Template(
 
 <script>
 (function () {
-  var url = document.getElementById("manifest-url").textContent.trim();
+  var urlEl = document.getElementById("manifest-url");
   var btn = document.getElementById("copy");
-  btn.addEventListener("click", function () {
+  if (urlEl && btn) btn.addEventListener("click", function () {
+    var url = urlEl.textContent.trim();
     var done = function () {
       btn.textContent = "✅ Copiado!";
       setTimeout(function () { btn.textContent = "🔗 Copiar manifest"; }, 1800);
     };
+    var failed = function () {
+      btn.textContent = "Não foi possível copiar";
+      setTimeout(function () { btn.textContent = "🔗 Copiar manifest"; }, 2200);
+    };
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(url).then(done, done);
+      navigator.clipboard.writeText(url).then(done, failed);
     } else {
       var t = document.createElement("textarea");
       t.value = url;
       document.body.appendChild(t);
       t.select();
-      try { document.execCommand("copy"); } catch (e) {}
+      var copied = false;
+      try { copied = document.execCommand("copy"); } catch (e) {}
       document.body.removeChild(t);
-      done();
+      copied ? done() : failed();
     }
   });
 
@@ -375,7 +406,16 @@ PAGE = Template(
   var sub = document.getElementById("drive-sub");
   var bar = document.getElementById("drive-bar");
 
-  fetch("$health_url", { headers: { "Accept": "application/json" } })
+  var healthUrl = "$health_url";
+  if (!healthUrl) {
+    dot.className = "dot warn";
+    val.textContent = "Acesso indisponível";
+    sub.textContent = "Regularize a conta ou peça ao administrador para verificar o Drive.";
+    bar.parentNode.style.display = "none";
+    return;
+  }
+
+  fetch(healthUrl, { headers: { "Accept": "application/json" } })
     .then(function (r) { return r.json(); })
     .then(function (d) {
       var drv = d.drive || {};
@@ -383,7 +423,7 @@ PAGE = Template(
         dot.className = "dot err";
         val.textContent = "Sem conexão";
         sub.textContent = "Não foi possível falar com a API do Drive"
-          + (drv.error ? " (" + drv.error + ")" : "") + " — reconecte pelo link de convite.";
+          + (drv.error ? " (" + drv.error + ")" : "") + " — fale com o administrador.";
         bar.parentNode.style.display = "none";
         return;
       }
@@ -411,6 +451,8 @@ PAGE = Template(
     });
 })();
 </script>
+</body>
+</html>
 """
 )
 
@@ -426,7 +468,8 @@ def _pill(text):
 
 
 def render(manifest, manifest_url, stremio_url, tmdb_enabled, proxy_enabled,
-           health_url=None, connect_url=None, account_status=None, logged_in=False):
+           health_url=None, connect_url=None, account_status=None, logged_in=False,
+           service_available=True):
     type_labels = {"movie": "Filmes", "series": "Séries"}
     type_pills = "\n      ".join(
         _pill(type_labels.get(t, t.capitalize())) for t in manifest.get("types", [])
@@ -476,6 +519,30 @@ def render(manifest, manifest_url, stremio_url, tmdb_enabled, proxy_enabled,
     else:
         account_status_card = ""
 
+    account_available = True if account_status is None else bool(account_status.get("active", True))
+    account_available = account_available and not bool(account_status and account_status.get("expired"))
+    can_install = account_available and service_available
+
+    if can_install:
+        install_block = f"""
+    <div class="install">
+      <a class="btn btn-primary" href="{stremio_url}">⬇️ Instalar no Stremio</a>
+      <button class="btn btn-ghost" id="copy" type="button">🔗 Copiar manifest</button>
+    </div>
+    <code class="url" id="manifest-url">{manifest_url}</code>"""
+    else:
+        if account_status and not account_status.get("active", True):
+            reason = "Esta conta foi desativada."
+        elif account_status and account_status.get("expired"):
+            reason = "O período de acesso desta conta terminou."
+        else:
+            reason = "A conta está ativa, mas não há uma conta Google Drive disponível."
+        install_block = f"""
+    <div class="access-notice" role="alert">
+      <strong>Instalação temporariamente indisponível</strong>
+      <span>{reason} {admin_whatsapp_html('Fale com o administrador')}</span>
+    </div>"""
+
     header_extra = (
         '<p style="margin-top:10px"><a href="/logout" style="color:var(--accent-2);'
         'font-size:13px" onclick="event.preventDefault();'
@@ -491,10 +558,11 @@ def render(manifest, manifest_url, stremio_url, tmdb_enabled, proxy_enabled,
         logo=manifest.get("logo", ""),
         favicon=manifest.get("favicon", ""),
         background=manifest.get("background", ""),
+        install_block=install_block,
         type_pills=type_pills,
         manifest_url=manifest_url,
         stremio_url=stremio_url,
-        health_url=health_url or "/health",
+        health_url=health_url if can_install else "",
         account_status_card=account_status_card,
         header_extra=header_extra,
         tmdb_dot=tmdb[0],

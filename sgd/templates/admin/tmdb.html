@@ -1,0 +1,37 @@
+{% extends "admin/base.html" %}
+{% block admin_content %}
+<h1>Chaves TMDB</h1>
+<p class="lede">Usadas para resolver título, ano e metadados em pt-BR. Mais de uma chave distribui o limite de requisições entre as chaves ativas.</p>
+<div class="panel">
+  <form id="create-tmdb" class="create" method="post" action="/admin/tmdb">
+    {% include "admin/_form.html" %}
+    <label>Nome da chave<input type="text" name="label" placeholder="Ex.: Chave 1" required></label>
+    <label>Chave da API TMDB<input type="password" name="api_key" autocomplete="off" required></label>
+    <button type="submit">Adicionar</button>
+  </form>
+</div>
+<div class="panel">
+  <table>
+    <thead><tr><th>Nome</th><th>Chave</th><th>Ações</th></tr></thead>
+    <tbody>
+    {% for key in keys %}
+      <tr>
+        <td data-label="Nome">{{ key.label }}<div class="status-label"><span class="dot {{ 'ok' if key.active else '' }}"></span>{{ 'ativa' if key.active else 'desativada' }}</div></td>
+        <td data-label="Chave"><code>{{ key.masked_key }}</code></td>
+        <td data-label="Ações"><div class="row-actions">
+          <form class="inline" method="post" action="/admin/tmdb/{{ key.id }}/toggle">
+            {% include "admin/_form.html" %}<button type="submit" class="ghost sm">{{ 'Desativar' if key.active else 'Ativar' }}</button>
+          </form>
+          <form class="inline" method="post" action="/admin/tmdb/{{ key.id }}/delete" data-confirm="Remover a chave {{ key.label }}?">
+            {% include "admin/_form.html" %}<button type="submit" class="danger sm">Remover</button>
+          </form>
+        </div></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="3"><div class="empty-state"><strong>Nenhuma chave TMDB</strong><span>Adicione uma chave acima para habilitar os metadados dos títulos.</span></div></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+<p class="lede">Pegue sua chave em <a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener noreferrer">themoviedb.org/settings/api</a>.</p>
+{% endblock %}
