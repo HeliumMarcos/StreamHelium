@@ -88,6 +88,41 @@ reconfigurar.
 
 Os dois rodam no CI a cada push e PR.
 
+## URL assinada e trava de reprodução
+
+A URL de reprodução leva `?u=<usuário>&n=<sessão>&e=<validade>&s=<assinatura>`,
+assinada pelo addon com `PROXY_SHARED_SECRET`. O Worker recalcula a
+assinatura e recusa o que não bater ou tiver vencido. Antes disso, qualquer
+um com o texto da URL assistia para sempre.
+
+O `n` é sorteado a cada listagem de streams, então dois aparelhos recebem
+URLs diferentes para o mesmo arquivo. É essa identidade — emitida pelo
+addon, não deduzida de User-Agent e IP — que permite a trava de verdade.
+
+Enquanto o vídeo roda, o Worker pergunta ao addon (no máximo 1x por 45s) se
+aquela sessão ainda tem a vaga do usuário. Se outro aparelho estiver
+assistindo há menos de `PLAYBACK_IDLE_SECONDS`, o addon responde 409 e o
+Worker devolve 403 ao player.
+
+Como o sinal é contínuo, uma sessão abandonada se libera sozinha em ~3
+minutos — sem precisar do painel admin. Em compensação, **pausa longa solta
+a vaga**: um player pausado com buffer cheio para de pedir bytes. Aumente
+`PLAYBACK_IDLE_SECONDS` se isso incomodar.
+
+Se o addon ou o banco cair, tanto o Worker quanto o endpoint liberam a
+reprodução. Trava é conveniência; não vale derrubar a casa por ela.
+
+### Ligando
+
+1. Deploy do addon (já assina, se `PROXY_SHARED_SECRET` estiver definido)
+2. Deploy do Worker
+3. Espere ~1 dia e então mude `REQUIRE_SIGNED_URLS` para `"true"` no
+   `wrangler.toml`. Antes disso, URLs antigas sem assinatura continuam
+   funcionando — e continuam sendo links públicos eternos.
+
+Com o proxy **desligado** nada disso vale: não há Worker no caminho, e a
+trava volta a ser a antiga, por User-Agent + IP.
+
 ## O que eu não fiz
 
 Não toquei no seu GitHub nem na Vercel — mesma regra de sempre. E não gerei

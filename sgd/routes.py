@@ -5,6 +5,7 @@ import logging
 from sgd import app, home, db
 from sgd import tenancy
 from sgd.meta import MetadataNotFound, Meta
+from sgd import signing
 from sgd.streams import Streams
 from sgd.utils import split_stream_id, hr_size
 from sgd.branding import admin_whatsapp_link
@@ -294,7 +295,25 @@ def addon_stream(user_id, stream_type, stream_id):
     if invalid_stream_type or invalid_id:
         abort(404)
 
-    if not _check_device_limit(user_id, request):
+    # Two different one-device-at-a-time mechanisms, and only one of them
+    # can work at a time.
+    #
+    # Through the proxy, the Worker enforces the limit against actual
+    # playback (see sgd/proxy_token.py), using a session id issued right
+    # here. That is strictly better: it watches bytes rather than menu
+    # opens, and its identity is one we minted instead of a User-Agent and
+    # an IP - which broke every time an app updated or a phone changed
+    # network. So don't also block here; just keep recording the device
+    # label for the admin page.
+    #
+    # Without the proxy there is no Worker in the path and nothing else to
+    # enforce anything, so the old fingerprint check still applies.
+    session_id = signing.new_session_id()
+    proxied = bool(os.environ.get("CF_PROXY_URL")) and _proxy_actually_enabled()
+
+    if proxied:
+        _check_device_limit(user_id, request)
+    elif not _check_device_limit(user_id, request):
         logger.info("Blocked stream request for user %s - device limit reached", user_id)
         resp = jsonify({
             "streams": [{
@@ -312,7 +331,10 @@ def addon_stream(user_id, stream_type, stream_id):
 
     try:
         resp = Response(
-            response=get_streams(g.gdrive, stream_type, stream_id),
+            response=get_streams(
+                g.gdrive, stream_type, stream_id,
+                viewer_id=user_id, session_id=session_id,
+            ),
             mimetype="application/json",
         )
         return common_headers(resp)
@@ -328,7 +350,7 @@ def common_headers(resp_obj):
     return resp_obj
 
 
-def get_streams(gdrive, stream_type, stream_id):
+def get_streams(gdrive, stream_type, stream_id, viewer_id=None, session_id=None):
     # Stream the response body so the connection stays open (and doesn't hit
     # a request timeout) while we search Drive and score the results.
     yield '{"streams":'
@@ -342,7 +364,7 @@ def get_streams(gdrive, stream_type, stream_id):
         "Got %d/%d unique results from gdrive after deduping in %s. Scoring results...",
         len(gdrive.results), gdrive.len_response, time_taken(start_time),
     )
-    streams = Streams(gdrive, stream_meta)
+    streams = Streams(gdrive, stream_meta, viewer_id=viewer_id, session_id=session_id)
     logger.info(
         "Fetched %d/%d valid stream(s) in %s for %s -> %s",
         len(streams.results), len(gdrive.results), time_taken(start_time),

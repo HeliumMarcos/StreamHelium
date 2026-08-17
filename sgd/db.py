@@ -121,6 +121,22 @@ def init_schema():
             """
         )
 
+        # One row per viewer, tracking which playback session is currently
+        # streaming. Distinct from device_sessions: that one is keyed on a
+        # guessed fingerprint and refreshed when a stream list is fetched,
+        # this one is keyed on a session id the addon issued and refreshed
+        # by the Worker while bytes are actually flowing.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS playback_sessions (
+                user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                session_id TEXT NOT NULL,
+                started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                last_seen TIMESTAMPTZ NOT NULL DEFAULT now()
+            );
+            """
+        )
+
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS settings (
@@ -537,6 +553,65 @@ def get_device_session(user_id: str) -> dict | None:
 def clear_device_session(user_id: str) -> None:
     with get_conn() as conn:
         conn.execute("DELETE FROM device_sessions WHERE user_id = %s", (user_id,))
+
+
+def claim_playback_session(user_id: str, session_id: str, idle_seconds: int) -> bool:
+    """Called by the Worker while a viewer is actually streaming bytes.
+
+    Grants the slot to `session_id` and refreshes it, unless a *different*
+    session is holding it and was seen within `idle_seconds`. Returns False
+    in that case and writes nothing.
+
+    Because the Worker calls this repeatedly while a video plays, an
+    abandoned session frees itself: stop watching, stop refreshing, and
+    after `idle_seconds` the next device takes over. That is the whole
+    reason this can use a short timeout where device_sessions needs hours -
+    its signal arrives continuously instead of once per stream listing.
+
+    The flip side is a long pause: a player with a full buffer stops
+    requesting bytes, so pausing for longer than `idle_seconds` can let
+    another device take the slot."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT session_id, last_seen FROM playback_sessions "
+            "WHERE user_id = %s FOR UPDATE",
+            (user_id,),
+        ).fetchone()
+        now = datetime.now(timezone.utc)
+
+        if row and row["session_id"] != session_id:
+            idle = (now - row["last_seen"]).total_seconds()
+            if idle < idle_seconds:
+                return False
+
+        conn.execute(
+            """
+            INSERT INTO playback_sessions (user_id, session_id, last_seen)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (user_id) DO UPDATE SET
+                session_id = EXCLUDED.session_id,
+                last_seen = EXCLUDED.last_seen,
+                started_at = CASE
+                    WHEN playback_sessions.session_id = EXCLUDED.session_id
+                    THEN playback_sessions.started_at
+                    ELSE EXCLUDED.last_seen
+                END
+            """,
+            (user_id, session_id, now),
+        )
+        return True
+
+
+def get_playback_session(user_id: str) -> dict | None:
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM playback_sessions WHERE user_id = %s", (user_id,)
+        ).fetchone()
+
+
+def clear_playback_session(user_id: str) -> None:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM playback_sessions WHERE user_id = %s", (user_id,))
 
 
 # --- generic settings (key/value) ------------------------------------------

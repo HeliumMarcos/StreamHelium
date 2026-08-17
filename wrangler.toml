@@ -21,6 +21,14 @@ enabled = true
 # back once ACCOUNTS is deleted.
 TOKEN_ENDPOINT = "https://stream-helium.vercel.app/internal/drive-token"
 
+# Refuse playback URLs that carry no signature. Leave this "false" for the
+# first day after deploying signed URLs: a player that is mid-film, or that
+# cached a stream list from before the change, is still holding an unsigned
+# link and would get cut off. Flip it to "true" once nothing old is in
+# flight - until then an unsigned URL is still an eternal public link to
+# the file, which is the hole signing exists to close.
+REQUIRE_SIGNED_URLS = "false"
+
 # Secrets are NOT declared here and are NOT touched by `wrangler deploy` -
 # they persist across deploys. Set them once:
 #   npx wrangler secret put TOKEN_ENDPOINT_SECRET

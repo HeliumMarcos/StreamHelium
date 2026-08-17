@@ -3,6 +3,7 @@ import time
 import logging
 import urllib
 import re
+from sgd import signing
 from sgd.ptn import parse_title
 from sgd.utils import hr_size, strip_accents, STOP_WORDS
 
@@ -30,10 +31,17 @@ def proxy_toggle_enabled():
 
 
 class Streams:
-    def __init__(self, gdrive, stream_meta):
+    def __init__(self, gdrive, stream_meta, viewer_id=None, session_id=None):
+        """viewer_id/session_id are what make a proxied URL signed and
+        attributable to one viewer and one playback session. They're
+        optional so callers that only score results (and the tests) don't
+        have to invent them; without them the proxy URL is emitted
+        unsigned, exactly as before."""
         self.results = []
         self.gdrive = gdrive
         self.strm_meta = stream_meta
+        self.viewer_id = viewer_id
+        self.session_id = session_id
         self.get_url = self.get_proxy_url
         self.proxy_url = os.environ.get("CF_PROXY_URL")
 
@@ -414,9 +422,17 @@ class Streams:
         self.constructed["behaviorHints"].pop("proxyHeaders", None)
         account_id = getattr(self.gdrive, "account_id", None)
         if account_id:
-            return f"{self.proxy_url}/proxy/{account_id}/load/{file_id}/{file_name}"
-        # Legacy single-account Worker (no account_id segment).
-        return f"{self.proxy_url}/load/{file_id}/{file_name}"
+            url = f"{self.proxy_url}/proxy/{account_id}/load/{file_id}/{file_name}"
+        else:
+            # Legacy single-account Worker (no account_id segment).
+            account_id = "default"
+            url = f"{self.proxy_url}/load/{file_id}/{file_name}"
+
+        if self.viewer_id and self.session_id:
+            query = signing.sign(account_id, file_id, self.viewer_id, self.session_id)
+            if query:
+                url = f"{url}?{query}"
+        return url
 
     def get_gapi_url(self):
         file_id = str(self.item.get("id", ""))
