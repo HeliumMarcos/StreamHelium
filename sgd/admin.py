@@ -402,7 +402,16 @@ def _drive_view(row):
             usage_pct=usage_pct,
         )
     elif live:
-        view["error"] = live.get("error", "")
+        reconnect_required = bool(live.get("reconnect_required"))
+        view.update(
+            status_dot="warn",
+            status_label=(
+                "reconexão necessária"
+                if reconnect_required
+                else "temporariamente indisponível"
+            ),
+            error=live.get("error", ""),
+        )
     return view
 
 

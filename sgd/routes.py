@@ -11,6 +11,7 @@ from sgd.branding import admin_whatsapp_link
 from json import dumps
 from flask import g, jsonify, abort, Response, redirect, request
 from datetime import datetime
+from google.auth.exceptions import RefreshError
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +150,35 @@ def mask_email(email):
     return f"{user[0]}{'*' * (len(user) - 2)}{user[-1]}@{domain}"
 
 
+def _drive_failure(error):
+    """Turn Drive/OAuth exceptions into stable, user-facing status data.
+
+    A stored refresh token only means that the account was connected once.
+    Google can later revoke it (most commonly after seven days while an
+    External OAuth app is still in Testing), so callers must not show a green
+    "connected" state merely because the encrypted token still exists.
+    """
+    message = str(error)
+    payload = error.args[1] if len(getattr(error, "args", ())) > 1 else None
+    oauth_code = payload.get("error") if isinstance(payload, dict) else None
+    invalid_grant = oauth_code == "invalid_grant" or "invalid_grant" in message.lower()
+
+    if isinstance(error, RefreshError) and invalid_grant:
+        return {
+            "connected": False,
+            "error_code": "authorization_expired",
+            "error": "Autorização do Google expirada ou revogada. Reconecte esta conta.",
+            "reconnect_required": True,
+        }
+
+    return {
+        "connected": False,
+        "error_code": "temporarily_unavailable",
+        "error": "Google Drive temporariamente indisponível. O sistema tentará novamente.",
+        "reconnect_required": False,
+    }
+
+
 def drive_status(gdrive):
     """A cheap liveness check against the Drive API. Takes the GoogleDrive
     instance explicitly so it can be called both from a family account's
@@ -158,11 +188,14 @@ def drive_status(gdrive):
         about = (
             gdrive.drive_instance.about()
             .get(fields="user(displayName,emailAddress),storageQuota")
-            .execute()
+            # Retry rate limits and transient 5xx responses with exponential
+            # backoff. OAuth invalid_grant remains final and is classified
+            # below instead of being retried indefinitely.
+            .execute(num_retries=2)
         )
     except Exception as e:
         logger.warning("Drive health check failed: %s", e)
-        return {"connected": False, "error": type(e).__name__}
+        return _drive_failure(e)
 
     user = about.get("user", {})
     quota = about.get("storageQuota", {})

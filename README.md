@@ -168,6 +168,12 @@ destinatária.
 
 7. Guarde o Client ID e o Client Secret nas variáveis da Vercel.
 
+> **Importante:** em **Google Auth Platform → Público-alvo**, deixe o status de
+> publicação como **Em produção**. Aplicações externas no modo **Teste** que
+> solicitam acesso ao Drive recebem refresh tokens que expiram em 7 dias. Ao
+> mudar para produção, reconecte cada conta Drive uma última vez para substituir
+> os tokens de teste já emitidos.
+
 O escopo solicitado pela aplicação é somente leitura:
 `https://www.googleapis.com/auth/drive.readonly`.
 

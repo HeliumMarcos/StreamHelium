@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from flask import g
+from google.auth.exceptions import RefreshError
 
 from sgd import app
 from sgd.routes import BASE_MANIFEST, mask_email
@@ -151,7 +152,7 @@ def test_user_health_reports_config_and_drive(client, monkeypatch):
     class FakeAbout:
         def get(self, **kwargs):
             class R:
-                def execute(self_inner):
+                def execute(self_inner, **kwargs):
                     return {
                         "user": {"emailAddress": "fulano@gmail.com"},
                         "storageQuota": {},
@@ -194,7 +195,43 @@ def test_user_health_degrades_when_drive_is_unreachable(client, monkeypatch):
     resp = client.get(f"/u/{TEST_USER_ID}/health")
 
     assert resp.status_code == 503
-    assert resp.get_json()["status"] == "degraded"
+    body = resp.get_json()
+    assert body["status"] == "degraded"
+    assert body["drive"]["error_code"] == "temporarily_unavailable"
+    assert body["drive"]["reconnect_required"] is False
+
+
+def test_user_health_explains_expired_google_authorization(client, monkeypatch):
+    class FakeRequest:
+        def execute(self, **kwargs):
+            raise RefreshError(
+                "invalid_grant: Token has been expired or revoked.",
+                {
+                    "error": "invalid_grant",
+                    "error_description": "Token has been expired or revoked.",
+                },
+            )
+
+    class FakeAbout:
+        def get(self, **kwargs):
+            return FakeRequest()
+
+    class FakeDriveInstance:
+        def about(self):
+            return FakeAbout()
+
+    class FakeGoogleDrive:
+        drive_instance = FakeDriveInstance()
+
+    _patch_tenant(monkeypatch, gdrive=FakeGoogleDrive())
+
+    resp = client.get(f"/u/{TEST_USER_ID}/health")
+
+    assert resp.status_code == 503
+    drive = resp.get_json()["drive"]
+    assert drive["error_code"] == "authorization_expired"
+    assert drive["reconnect_required"] is True
+    assert "expirada ou revogada" in drive["error"]
 
 
 @pytest.mark.parametrize(
