@@ -378,6 +378,30 @@ def test_admin_drives_list_shows_live_status(client, monkeypatch):
     assert "10.0GiB" in body
 
 
+def test_admin_drives_marks_expired_authorization_as_reconnect_required(client, monkeypatch):
+    monkeypatch.setattr("sgd.db.list_drive_accounts", lambda: [{
+        "id": "d1", "label": "Drive 1", "active": True,
+        "connected": True, "assigned_count": 2,
+    }])
+    monkeypatch.setattr("sgd.db.get_setting", lambda key, default=None: default)
+    monkeypatch.setattr(
+        "sgd.admin._live_drive_status",
+        lambda did: {
+            "connected": False,
+            "error_code": "authorization_expired",
+            "error": "Autorização do Google expirada ou revogada. Reconecte esta conta.",
+            "reconnect_required": True,
+        },
+    )
+    _login(client)
+
+    body = client.get("/admin/drives").get_data(as_text=True)
+
+    assert "reconexão necessária" in body
+    assert "Autorização do Google expirada ou revogada" in body
+    assert "Sem resposta do Drive (RefreshError)" not in body
+
+
 def test_admin_drives_list(client, monkeypatch):
     monkeypatch.setattr("sgd.db.list_drive_accounts", lambda: [{
         "id": "d1", "label": "Drive 1", "active": True,
