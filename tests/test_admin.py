@@ -209,6 +209,7 @@ def test_admin_toggle_missing_user_404s(client, monkeypatch):
 
 def test_admin_reassign_user_pins_drive(client, monkeypatch):
     monkeypatch.setattr("sgd.db.get_user", lambda uid: {"id": uid})
+    monkeypatch.setattr("sgd.db.get_drive_account", lambda did: {"id": did, "active": True})
     calls = []
     monkeypatch.setattr(
         "sgd.db.reassign_drive_account",
@@ -327,6 +328,7 @@ def test_admin_reset_password(client, monkeypatch):
 
 def test_admin_delete_user(client, monkeypatch):
     calls = []
+    monkeypatch.setattr("sgd.db.get_user", lambda uid: {"id": uid})
     monkeypatch.setattr("sgd.db.delete_user", lambda uid: calls.append(uid))
     _login(client)
 
@@ -334,6 +336,21 @@ def test_admin_delete_user(client, monkeypatch):
 
     assert resp.status_code == 302
     assert calls == ["abc"]
+
+
+def test_admin_delete_missing_user_404s(client, monkeypatch):
+    """Antes isso respondia "conta removida" para um id que nunca existiu,
+    o que e uma mentira silenciosa. A API JSON precisa distinguir os dois
+    casos, e o painel passou a distinguir junto."""
+    calls = []
+    monkeypatch.setattr("sgd.db.get_user", lambda uid: None)
+    monkeypatch.setattr("sgd.db.delete_user", lambda uid: calls.append(uid))
+    _login(client)
+
+    resp = client.post("/admin/users/nao-existe/delete")
+
+    assert resp.status_code == 404
+    assert calls == []
 
 
 def test_admin_renew_user(client, monkeypatch):
@@ -458,6 +475,7 @@ def test_admin_toggle_drive(client, monkeypatch):
 
 def test_admin_delete_drive(client, monkeypatch):
     calls = []
+    monkeypatch.setattr("sgd.db.get_drive_account", lambda did: {"id": did, "active": True})
     monkeypatch.setattr(
         "sgd.db.redistribute_and_delete_drive_account",
         lambda did: calls.append(did) or 0,
@@ -468,6 +486,21 @@ def test_admin_delete_drive(client, monkeypatch):
 
     assert resp.status_code == 302
     assert calls == ["d1"]
+
+
+def test_admin_delete_missing_drive_404s(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr("sgd.db.get_drive_account", lambda did: None)
+    monkeypatch.setattr(
+        "sgd.db.redistribute_and_delete_drive_account",
+        lambda did: calls.append(did) or 0,
+    )
+    _login(client)
+
+    resp = client.post("/admin/drives/nao-existe/delete")
+
+    assert resp.status_code == 404
+    assert calls == []
 
 
 def test_admin_routes_require_login_even_with_valid_data(client, monkeypatch):
