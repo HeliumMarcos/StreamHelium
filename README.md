@@ -321,6 +321,9 @@ ainda não configurado fica fechado, e não aberto.
 | `PUT /api/admin/drives/<id>/active` | Ativa/desativa |
 | `DELETE /api/admin/drives/<id>` | Remove e redistribui as famílias |
 | `GET POST /api/admin/tmdb-keys` | Lista e cria chaves |
+| `POST /api/admin/authenticate` | Confere e-mail e senha de um espectador (401 credencial errada, 403 conta indisponível) |
+| `GET /api/admin/invites/<token>` | Resolve um convite |
+| `PUT /api/admin/users/<id>/password` | Define a senha |
 | `PUT /api/admin/tmdb-keys/<id>/active` | Ativa/desativa |
 | `DELETE /api/admin/tmdb-keys/<id>` | Remove |
 | `GET /api/admin/settings` | Estado do proxy |

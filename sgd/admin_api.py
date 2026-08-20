@@ -320,6 +320,44 @@ def api_free_device(uid):
     return _ok({"freed": True})
 
 
+# --- viewer credentials -------------------------------------------------
+#
+# O Catálogo hospeda o login e a página da conta; aqui ficam só as duas
+# operações que dependem do que este sistema guarda. A senha em claro
+# passa por aqui e não é gravada em lugar nenhum — vira hash na hora, e
+# o hash nunca sai pela API.
+
+@endpoint("/authenticate", methods=["POST"])
+def api_authenticate():
+    """Confere e-mail e senha de um espectador.
+
+    Credencial errada e conta indisponível são casos diferentes, e voltam
+    com status diferentes (401 e 403): dizer "senha incorreta" para quem
+    digitou certo manda a pessoa tentar de novo para sempre.
+
+    Sem limite de tentativas aqui de propósito — quem chama já precisa do
+    token de serviço, e o formulário exposto ao público é o do Catálogo,
+    que é onde a contagem faz sentido.
+    """
+    body = _json_body()
+    user = actions.authenticate(body.get("email"), body.get("password"))
+    return _ok({"user": _user_json(user)})
+
+
+@endpoint("/invites/<token>")
+def api_invite(token):
+    """Resolve um convite para o Catálogo montar a página de boas-vindas."""
+    user = actions.user_by_invite(token)
+    return _ok({"user": _user_json(user)})
+
+
+@endpoint("/users/<uid>/password", methods=["PUT"])
+def api_set_password(uid):
+    body = _json_body()
+    user = actions.set_password(uid, body.get("password"))
+    return _ok({"user": _user_json(user)})
+
+
 # --- Drive account pool -------------------------------------------------
 
 @endpoint("/drives")

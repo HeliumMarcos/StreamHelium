@@ -79,6 +79,95 @@ def _forget_cached_drive(drive_account_id) -> None:
     _drive_cache.pop(str(drive_account_id), None)
 
 
+# --- viewer credentials -------------------------------------------------
+
+# Mesmo minimo que o formulario antigo do proprio Stream Helium usava.
+# Curto de proposito: quem instala isso e familia, nao empresa, e uma
+# regra severa demais so produz senha anotada em papel.
+MIN_PASSWORD_LENGTH = 6
+
+
+class InvalidCredentials(AdminActionError):
+    def __init__(self):
+        super().__init__("E-mail ou senha incorretos.", status=401)
+
+
+class AccountUnavailable(AdminActionError):
+    """Credencial certa, conta indisponivel. E um caso diferente de senha
+    errada, e a pessoa precisa saber qual dos dois aconteceu — dizer
+    "senha incorreta" para quem digitou certo manda ela tentar de novo
+    para sempre."""
+
+    def __init__(self, message: str):
+        super().__init__(message, status=403)
+
+
+def authenticate(email: str | None, password: str | None) -> dict:
+    """Confere e-mail e senha de uma conta de espectador.
+
+    Nunca devolve o hash — so a linha do usuario, ja filtrada pelo
+    serializador da API.
+    """
+    from werkzeug.security import check_password_hash
+
+    email = (email or "").strip().lower()
+    password = password or ""
+
+    if not email or not password:
+        raise InvalidCredentials()
+
+    user_row = db.get_user_by_email(email)
+
+    # check_password_hash roda mesmo sem usuario para o tempo de resposta
+    # nao denunciar quais e-mails existem.
+    hash_guardado = (user_row or {}).get("password_hash") or ""
+    confere = check_password_hash(hash_guardado, password) if hash_guardado else False
+
+    if not user_row or not confere:
+        raise InvalidCredentials()
+
+    if not user_row.get("active"):
+        raise AccountUnavailable("Seu acesso está desativado. Fale com o administrador.")
+
+    if not db.is_effectively_active(user_row):
+        raise AccountUnavailable("Seu acesso expirou. Fale com o administrador para renovar.")
+
+    return user_row
+
+
+def user_by_invite(token: str | None) -> dict:
+    """Resolve um convite. Convite de conta desativada ou expirada nao
+    abre: definir senha ali criaria a expectativa de um acesso que nao
+    vai funcionar."""
+    token = (token or "").strip()
+    if not token:
+        raise NotFound("Convite não encontrado.")
+
+    user_row = db.get_user_by_invite_token(token)
+    if not user_row:
+        raise NotFound("Convite não encontrado.")
+
+    if not db.is_effectively_active(user_row):
+        raise AccountUnavailable("Este convite não está mais válido. Fale com o administrador.")
+
+    return user_row
+
+
+def set_password(uid: str, password: str | None) -> dict:
+    from werkzeug.security import generate_password_hash
+
+    user_row = _require_user(uid)
+    password = password or ""
+
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise AdminActionError(
+            f"A senha precisa ter pelo menos {MIN_PASSWORD_LENGTH} caracteres."
+        )
+
+    db.set_password(uid, generate_password_hash(password))
+    return _require_user(uid)
+
+
 # --- device and playback state ------------------------------------------
 
 def _minutes_since(moment) -> float | None:
