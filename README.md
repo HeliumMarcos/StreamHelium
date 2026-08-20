@@ -188,6 +188,7 @@ Variables**. Use valores distintos e seguros; nunca coloque segredos no Git.
 | `SECRET_KEY` | Sim | Assina as sessões Flask. |
 | `ENCRYPTION_KEY` | Sim | Chave Fernet usada para criptografar tokens Google e chaves TMDB. |
 | `ADMIN_PASSWORD` | Sim | Senha única do painel administrativo. |
+| `ADMIN_API_TOKEN` | Se usar o Catálogo | Credencial de serviço da API administrativa (`/api/admin`). Sem ela, a API inteira responde 503. |
 | `GOOGLE_CLIENT_ID` | Sim | Client ID OAuth Web do Google. |
 | `GOOGLE_CLIENT_SECRET` | Sim | Client Secret OAuth Web do Google. |
 | `TMDB_API_KEY` | Não | Chave legada de fallback; prefira o pool em `/admin/tmdb`. |
@@ -256,6 +257,55 @@ As migrações existentes são aditivas e usam `ADD COLUMN IF NOT EXISTS`.
 
 Não é necessário gerar refresh tokens por Colab nem cadastrar credenciais
 Google em cada conta familiar.
+
+## API administrativa
+
+O Catálogo (`catalogo.heliummarcos.com.br`) administra este sistema por
+`/api/admin`, para que famílias, contas Drive e chaves TMDB tenham um
+painel só. As telas em `/admin` continuam funcionando e são o acesso de
+emergência.
+
+A autenticação é por `Authorization: Bearer $ADMIN_API_TOKEN`, comparado
+em tempo constante. É de propósito uma credencial diferente da
+`ADMIN_PASSWORD`: aquela é de uma pessoa digitando num formulário, e uma
+credencial de serviço vazada precisa poder ser trocada sem trancar o
+administrador fora do próprio painel. Gere com:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+Com `ADMIN_API_TOKEN` ausente, toda a API responde `503` — um ambiente
+ainda não configurado fica fechado, e não aberto.
+
+| Método e rota | Finalidade |
+|---|---|
+| `GET /api/admin/ping` | Confere token e conexão sem tocar em dados |
+| `GET /api/admin/overview` | Contadores do painel |
+| `GET POST /api/admin/users` | Lista e cria contas de família |
+| `GET PATCH DELETE /api/admin/users/<id>` | Lê, edita e remove |
+| `PUT /api/admin/users/<id>/active` | Ativa/desativa (estado explícito) |
+| `POST /api/admin/users/<id>/renew` | Renova por N dias |
+| `PUT /api/admin/users/<id>/drive` | Fixa um Drive, ou volta ao automático |
+| `DELETE /api/admin/users/<id>/password` | Reseta a senha |
+| `DELETE /api/admin/users/<id>/device` | Libera as duas travas de dispositivo |
+| `GET POST /api/admin/drives` | Lista e cria contas Drive |
+| `PUT /api/admin/drives/<id>/active` | Ativa/desativa |
+| `DELETE /api/admin/drives/<id>` | Remove e redistribui as famílias |
+| `GET POST /api/admin/tmdb-keys` | Lista e cria chaves |
+| `PUT /api/admin/tmdb-keys/<id>/active` | Ativa/desativa |
+| `DELETE /api/admin/tmdb-keys/<id>` | Remove |
+| `GET /api/admin/settings` | Estado do proxy |
+| `PUT /api/admin/settings/proxy` | Liga/desliga o proxy |
+
+As regras ficam em `sgd/admin_actions.py`, compartilhadas com as telas
+HTML — as duas camadas são finas por cima delas, para não divergirem.
+
+Conectar uma conta Drive ao Google continua sendo feito aqui, no
+navegador: a URI de callback do OAuth está registrada neste domínio.
+
+O que nunca sai pela API: hashes de senha, refresh tokens do Google e as
+chaves TMDB em claro — dessas vão só os quatro últimos dígitos.
 
 ## Cloudflare Worker
 

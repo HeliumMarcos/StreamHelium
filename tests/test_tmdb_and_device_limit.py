@@ -87,6 +87,7 @@ def test_admin_toggle_tmdb_key(client, monkeypatch):
 
 def test_admin_delete_tmdb_key(client, monkeypatch):
     calls = []
+    monkeypatch.setattr("sgd.db.get_tmdb_key", lambda tid: {"id": tid, "active": True})
     monkeypatch.setattr("sgd.db.delete_tmdb_key", lambda tid: calls.append(tid))
     _login(client)
 
@@ -104,9 +105,11 @@ def test_admin_tmdb_requires_login(client):
 
 def test_admin_free_device(client, monkeypatch):
     calls = []
+    monkeypatch.setattr("sgd.db.get_user", lambda uid: {"id": uid})
     monkeypatch.setattr(
         "sgd.db.clear_device_session", lambda uid: calls.append(uid)
     )
+    monkeypatch.setattr("sgd.db.clear_playback_session", lambda uid: None)
     _login(client)
 
     resp = client.post("/admin/users/abc/free-device")

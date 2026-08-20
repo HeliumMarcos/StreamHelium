@@ -21,9 +21,36 @@ from datetime import datetime, timezone
 
 from flask import abort, flash, get_flashed_messages, redirect, render_template, request, session
 
+from sgd import admin_actions as actions
 from sgd import app, db
+from sgd.admin_actions import AdminActionError, NotFound
 
 logger = logging.getLogger(__name__)
+
+
+def _flash_errors(redirect_to):
+    """Executa uma acao e transforma AdminActionError em flash + redirect.
+
+    As regras vivem em sgd/admin_actions.py, compartilhadas com a API JSON
+    (sgd/admin_api.py). Aqui so fica a traducao para o que o painel HTML
+    fala: uma mensagem na tela e uma volta para a listagem.
+    """
+    def run(action, success_message=None):
+        try:
+            result = action()
+        except NotFound:
+            # Registro inexistente continua sendo 404 aqui, como sempre foi:
+            # significa URL adulterada ou tela aberta ha muito tempo, e nao
+            # um erro de preenchimento que caiba numa mensagem de formulario.
+            # A API JSON responde 404 para o mesmo caso.
+            abort(404)
+        except AdminActionError as e:
+            flash(e.message, "error")
+            return redirect(redirect_to), None
+        if success_message:
+            flash(success_message, "success")
+        return redirect(redirect_to), result
+    return run
 
 
 def _live_drive_status(drive_account_id):
@@ -204,152 +231,105 @@ def admin_home():
 @app.route("/admin/users", methods=["POST"])
 @require_admin
 def admin_create_user():
-    email = (request.form.get("email") or "").strip().lower()
-    display_name = (request.form.get("display_name") or "").strip() or None
-    expires_raw = (request.form.get("expires_in_days") or "").strip()
-    expires_in_days = int(expires_raw) if expires_raw.isdigit() else None
-    chosen_drive_id = (request.form.get("drive_account_id") or "").strip() or None
-    if not email or "@" not in email:
-        flash("Informe um endereço de e-mail válido.", "error")
-        return redirect("/admin")
-
-    try:
-        if chosen_drive_id:
-            drive_account_id, pinned = chosen_drive_id, True
-        else:
-            auto = db.pick_least_loaded_drive_account()
-            drive_account_id = str(auto["id"]) if auto else None
-            pinned = False
-        db.create_user(
-            email, display_name,
-            drive_account_id=drive_account_id,
-            expires_in_days=expires_in_days,
-            pinned=pinned,
-        )
-        flash("Conta de família criada com sucesso.", "success")
-    except Exception as e:
-        logger.warning("Failed to create user %s: %s", email, e)
-        flash("Não foi possível criar a conta. Verifique se o e-mail já está cadastrado.", "error")
-    return redirect("/admin")
+    response, _ = _flash_errors("/admin")(
+        lambda: actions.create_user(
+            email=request.form.get("email"),
+            display_name=request.form.get("display_name"),
+            expires_in_days=request.form.get("expires_in_days"),
+            drive_account_id=request.form.get("drive_account_id"),
+        ),
+        "Conta de família criada com sucesso.",
+    )
+    return response
 
 
 @app.route("/admin/users/<uid>/toggle", methods=["POST"])
 @require_admin
 def admin_toggle_user(uid):
-    user_row = db.get_user(uid)
-    if not user_row:
-        abort(404)
-    db.set_active(uid, not user_row["active"])
-    flash("Status da conta atualizado.", "success")
-    return redirect("/admin")
+    response, _ = _flash_errors("/admin")(
+        lambda: actions.toggle_user(uid),
+        "Status da conta atualizado.",
+    )
+    return response
 
 
 @app.route("/admin/users/<uid>/edit", methods=["POST"])
 @require_admin
 def admin_edit_user(uid):
-    user_row = db.get_user(uid)
-    if not user_row:
-        abort(404)
-
-    email = (request.form.get("email") or "").strip().lower()
-    display_name = (request.form.get("display_name") or "").strip() or None
-    clear_expiration = request.form.get("no_expiration") == "on"
-    expires_raw = (request.form.get("expires_at") or "").strip()
-
-    if not email or "@" not in email:
-        flash("Informe um endereço de e-mail válido.", "error")
-        return redirect("/admin")
-
-    expires_at = None
-    if not clear_expiration and expires_raw:
-        try:
-            expires_at = datetime.strptime(expires_raw, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        except ValueError:
-            flash("Informe uma data de expiração válida.", "error")
-            return redirect("/admin")
-
-    db.update_user(uid, email, display_name, expires_at, clear_expiration=clear_expiration)
-    flash("Dados da conta atualizados.", "success")
-    return redirect("/admin")
+    response, _ = _flash_errors("/admin")(
+        lambda: actions.update_user(
+            uid,
+            email=request.form.get("email"),
+            display_name=request.form.get("display_name"),
+            expires_at=request.form.get("expires_at"),
+            clear_expiration=request.form.get("no_expiration") == "on",
+        ),
+        "Dados da conta atualizados.",
+    )
+    return response
 
 
 @app.route("/admin/users/<uid>/renew", methods=["POST"])
 @require_admin
 def admin_renew_user(uid):
-    user_row = db.get_user(uid)
-    if not user_row:
-        abort(404)
     days_raw = (request.form.get("days") or "30").strip()
     days = int(days_raw) if days_raw.isdigit() else 30
-    db.renew_user(uid, days)
-    flash(f"Acesso renovado por {days} dias.", "success")
-    return redirect("/admin")
+    response, _ = _flash_errors("/admin")(
+        lambda: actions.renew_user(uid, days),
+        f"Acesso renovado por {days} dias.",
+    )
+    return response
 
 
 @app.route("/admin/users/<uid>/reassign", methods=["POST"])
 @require_admin
 def admin_reassign_user(uid):
     """Pins this family account to a specific pool account."""
-    from sgd.tenancy import _drive_cache
-    user_row = db.get_user(uid)
-    if not user_row:
-        abort(404)
-    drive_account_id = (request.form.get("drive_account_id") or "").strip() or None
-    if not drive_account_id:
-        flash("Escolha uma conta Drive para fazer a atribuição.", "error")
-        return redirect("/admin")
-    db.reassign_drive_account(uid, drive_account_id, pinned=True)
-    _drive_cache.pop(str(drive_account_id), None)
-    flash("Conta Drive fixada para esta família.", "success")
-    return redirect("/admin")
+    response, _ = _flash_errors("/admin")(
+        lambda: actions.reassign_user(uid, request.form.get("drive_account_id")),
+        "Conta Drive fixada para esta família.",
+    )
+    return response
 
 
 @app.route("/admin/users/<uid>/auto-assign", methods=["POST"])
 @require_admin
 def admin_auto_assign_user(uid):
-    user_row = db.get_user(uid)
-    if not user_row:
-        abort(404)
-    auto = db.pick_least_loaded_drive_account()
-    db.reassign_drive_account(uid, str(auto["id"]) if auto else None, pinned=False)
-    flash("Distribuição automática reativada.", "success")
-    return redirect("/admin")
+    response, _ = _flash_errors("/admin")(
+        lambda: actions.auto_assign_user(uid),
+        "Distribuição automática reativada.",
+    )
+    return response
 
 
 @app.route("/admin/users/<uid>/reset-password", methods=["POST"])
 @require_admin
 def admin_reset_password(uid):
-    user_row = db.get_user(uid)
-    if not user_row:
-        abort(404)
-    db.clear_password(uid)
-    flash("Senha removida. A pessoa deverá criar uma nova pelo convite.", "success")
-    return redirect("/admin")
+    response, _ = _flash_errors("/admin")(
+        lambda: actions.reset_password(uid),
+        "Senha removida. A pessoa deverá criar uma nova pelo convite.",
+    )
+    return response
 
 
 @app.route("/admin/users/<uid>/free-device", methods=["POST"])
 @require_admin
 def admin_free_device(uid):
-    # Clear both locks. Through the proxy the playback slot is the one that
-    # actually blocks anything, and it normally frees itself within
-    # PLAYBACK_IDLE_SECONDS - but if this button is being pressed, something
-    # is stuck and leaving half the state behind would look like the button
-    # did nothing.
-    db.clear_device_session(uid)
-    try:
-        db.clear_playback_session(uid)
-    except Exception as e:
-        logger.warning("Could not clear playback session for %s: %s", uid, e)
-    flash("Dispositivo liberado.", "success")
-    return redirect("/admin")
+    response, _ = _flash_errors("/admin")(
+        lambda: actions.free_device(uid),
+        "Dispositivo liberado.",
+    )
+    return response
 
 
 @app.route("/admin/users/<uid>/delete", methods=["POST"])
 @require_admin
 def admin_delete_user(uid):
-    db.delete_user(uid)
-    flash("Conta de família removida.", "success")
-    return redirect("/admin")
+    response, _ = _flash_errors("/admin")(
+        lambda: actions.delete_user(uid),
+        "Conta de família removida.",
+    )
+    return response
 
 
 # --- drive account pool -------------------------------------------------
@@ -373,9 +353,8 @@ def admin_drives():
 @app.route("/admin/settings/proxy/toggle", methods=["POST"])
 @require_admin
 def admin_toggle_proxy():
-    current = db.get_setting("cf_proxy_enabled", default="1") != "0"
-    db.set_setting("cf_proxy_enabled", "0" if current else "1")
-    flash(f"Proxy Cloudflare {'desativado' if current else 'ativado'}.", "success")
+    enabled = actions.toggle_proxy()
+    flash(f"Proxy Cloudflare {'ativado' if enabled else 'desativado'}.", "success")
     return redirect("/admin/drives")
 
 
@@ -460,34 +439,30 @@ def admin_drives_worker_config():
 @app.route("/admin/drives", methods=["POST"])
 @require_admin
 def admin_create_drive():
-    label = (request.form.get("label") or "").strip()
-    if not label:
-        flash("Informe um nome para a conta Drive.", "error")
-        return redirect("/admin/drives")
-    db.create_drive_account(label)
-    flash("Conta Drive adicionada. Agora conecte-a ao Google.", "success")
-    return redirect("/admin/drives")
+    response, _ = _flash_errors("/admin/drives")(
+        lambda: actions.create_drive(request.form.get("label")),
+        "Conta Drive adicionada. Agora conecte-a ao Google.",
+    )
+    return response
 
 
 @app.route("/admin/drives/<did>/toggle", methods=["POST"])
 @require_admin
 def admin_toggle_drive(did):
-    drive_row = db.get_drive_account(did)
-    if not drive_row:
-        abort(404)
-    db.set_drive_account_active(did, not drive_row["active"])
-    flash("Status da conta Drive atualizado.", "success")
-    return redirect("/admin/drives")
+    response, _ = _flash_errors("/admin/drives")(
+        lambda: actions.toggle_drive(did),
+        "Status da conta Drive atualizado.",
+    )
+    return response
 
 
 @app.route("/admin/drives/<did>/delete", methods=["POST"])
 @require_admin
 def admin_delete_drive(did):
-    from sgd.tenancy import _drive_cache
-    affected = db.redistribute_and_delete_drive_account(did)
-    _drive_cache.pop(str(did), None)
-    flash(f"Conta Drive removida; {affected} família(s) redistribuída(s).", "success")
-    return redirect("/admin/drives")
+    response, affected = _flash_errors("/admin/drives")(lambda: actions.delete_drive(did))
+    if affected is not None:
+        flash(f"Conta Drive removida; {affected} família(s) redistribuída(s).", "success")
+    return response
 
 
 # --- TMDB key pool --------------------------------------------------------
@@ -516,30 +491,28 @@ def admin_tmdb():
 @app.route("/admin/tmdb", methods=["POST"])
 @require_admin
 def admin_create_tmdb():
-    label = (request.form.get("label") or "").strip()
-    api_key = (request.form.get("api_key") or "").strip()
-    if not label or not api_key:
-        flash("Informe o nome e a chave da API TMDB.", "error")
-        return redirect("/admin/tmdb")
-    db.create_tmdb_key(label, api_key)
-    flash("Chave TMDB adicionada.", "success")
-    return redirect("/admin/tmdb")
+    response, _ = _flash_errors("/admin/tmdb")(
+        lambda: actions.create_tmdb_key(request.form.get("label"), request.form.get("api_key")),
+        "Chave TMDB adicionada.",
+    )
+    return response
 
 
 @app.route("/admin/tmdb/<tid>/toggle", methods=["POST"])
 @require_admin
 def admin_toggle_tmdb(tid):
-    key_row = db.get_tmdb_key(tid)
-    if not key_row:
-        abort(404)
-    db.set_tmdb_key_active(tid, not key_row["active"])
-    flash("Status da chave TMDB atualizado.", "success")
-    return redirect("/admin/tmdb")
+    response, _ = _flash_errors("/admin/tmdb")(
+        lambda: actions.toggle_tmdb_key(tid),
+        "Status da chave TMDB atualizado.",
+    )
+    return response
 
 
 @app.route("/admin/tmdb/<tid>/delete", methods=["POST"])
 @require_admin
 def admin_delete_tmdb(tid):
-    db.delete_tmdb_key(tid)
-    flash("Chave TMDB removida.", "success")
-    return redirect("/admin/tmdb")
+    response, _ = _flash_errors("/admin/tmdb")(
+        lambda: actions.delete_tmdb_key(tid),
+        "Chave TMDB removida.",
+    )
+    return response
