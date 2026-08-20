@@ -192,6 +192,8 @@ Variables**. Use valores distintos e seguros; nunca coloque segredos no Git.
 | `GOOGLE_CLIENT_ID` | Sim | Client ID OAuth Web do Google. |
 | `GOOGLE_CLIENT_SECRET` | Sim | Client Secret OAuth Web do Google. |
 | `TMDB_API_KEY` | Não | Chave legada de fallback; prefira o pool em `/admin/tmdb`. |
+| `CATALOG_API_URL` | Não | Catálogo consultado antes das fontes externas; padrão: `https://catalogo.heliummarcos.com.br`. |
+| `CATALOG_API_TIMEOUT` | Não | Segundos de espera pelo Catálogo antes de seguir sem ele; padrão: `2.5`. |
 | `CF_PROXY_URL` | Não | URL base do Worker Cloudflare. |
 | `PROXY_SHARED_SECRET` | Se usar o proxy | Protege o endpoint interno de tokens e assina as URLs de reprodução. |
 | `PLAYBACK_IDLE_SECONDS` | Não | Silêncio tolerado antes que outro dispositivo assuma a vez; padrão: `180`. |
@@ -261,6 +263,28 @@ As migrações existentes são aditivas e usam `ADD COLUMN IF NOT EXISTS`.
 
 Não é necessário gerar refresh tokens por Colab nem cadastrar credenciais
 Google em cada conta familiar.
+
+## Metadados vindos do Catálogo
+
+Antes de procurar no Drive, cada reprodução precisa resolver título,
+título original e ano — é isso que decide se um arquivo é encontrado.
+
+O Catálogo já tem esses campos, curados à mão, e quem os curou é a mesma
+pessoa que nomeou os arquivos no Drive. Por isso ele é consultado
+primeiro, em `GET /api/interno/titulos/{imdb_id}`, autenticado com o
+mesmo `ADMIN_API_TOKEN` — o segredo vale nos dois sentidos.
+
+O que isso aposenta são as duas fontes IMDb: a API de sugestões e a
+raspagem do HTML da página de release info, as mais lentas e a que quebra
+sempre que a página muda. **TMDB e Cinemeta continuam rodando**, porque
+cada um acrescenta variantes de título que o Catálogo não tem — um título
+de lançamento em inglês, uma grafia alternativa — e cada variante a mais
+é outra chance de casar com o nome real do arquivo.
+
+Títulos fora do catálogo seguem pelo caminho antigo, intacto.
+
+A consulta falha macio: Catálogo lento ou fora do ar nunca é pior que não
+ter perguntado. Qualquer erro volta sem dados e o caminho antigo roda.
 
 ## API administrativa
 
