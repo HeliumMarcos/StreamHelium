@@ -513,3 +513,168 @@ def test_a_wrong_token_still_says_only_that_it_is_invalid(client):
 
     assert resp.status_code == 401
     assert resp.get_json()["error"] == "Credencial inválida."
+
+
+# --- credenciais do espectador ------------------------------------------
+
+def _com_senha(senha="segredo123", **overrides):
+    from werkzeug.security import generate_password_hash
+    return user_row(password_hash=generate_password_hash(senha), **overrides)
+
+
+def test_authenticate_accepts_the_right_password(client, monkeypatch):
+    monkeypatch.setattr("sgd.db.get_user_by_email", lambda e: _com_senha())
+
+    resp = client.post(
+        "/api/admin/authenticate",
+        json={"email": "familia@exemplo.com", "password": "segredo123"},
+        headers=auth(),
+    )
+
+    assert resp.status_code == 200
+    assert resp.get_json()["user"]["email"] == "familia@exemplo.com"
+
+
+def test_authenticate_never_returns_the_hash(client, monkeypatch):
+    monkeypatch.setattr("sgd.db.get_user_by_email", lambda e: _com_senha())
+
+    bruto = client.post(
+        "/api/admin/authenticate",
+        json={"email": "familia@exemplo.com", "password": "segredo123"},
+        headers=auth(),
+    ).get_data(as_text=True)
+
+    assert "scrypt" not in bruto and "pbkdf2" not in bruto
+    assert "password_hash" not in bruto
+
+
+def test_authenticate_rejects_the_wrong_password(client, monkeypatch):
+    monkeypatch.setattr("sgd.db.get_user_by_email", lambda e: _com_senha())
+
+    resp = client.post(
+        "/api/admin/authenticate",
+        json={"email": "familia@exemplo.com", "password": "errada"},
+        headers=auth(),
+    )
+
+    assert resp.status_code == 401
+
+
+def test_an_unknown_email_looks_the_same_as_a_wrong_password(client, monkeypatch):
+    """Respostas diferentes revelariam quais e-mails existem."""
+    monkeypatch.setattr("sgd.db.get_user_by_email", lambda e: None)
+
+    resp = client.post(
+        "/api/admin/authenticate",
+        json={"email": "ninguem@exemplo.com", "password": "qualquer"},
+        headers=auth(),
+    )
+
+    assert resp.status_code == 401
+    assert resp.get_json()["error"] == "E-mail ou senha incorretos."
+
+
+def test_an_account_without_a_password_cannot_log_in(client, monkeypatch):
+    # Convidada mas ainda sem senha definida.
+    monkeypatch.setattr("sgd.db.get_user_by_email", lambda e: user_row(password_hash=None))
+
+    resp = client.post(
+        "/api/admin/authenticate",
+        json={"email": "familia@exemplo.com", "password": ""},
+        headers=auth(),
+    )
+
+    assert resp.status_code == 401
+
+
+def test_a_disabled_account_is_told_so_instead_of_wrong_password(client, monkeypatch):
+    """Dizer "senha incorreta" para quem digitou certo manda a pessoa
+    tentar de novo para sempre."""
+    monkeypatch.setattr("sgd.db.get_user_by_email", lambda e: _com_senha(active=False))
+
+    resp = client.post(
+        "/api/admin/authenticate",
+        json={"email": "familia@exemplo.com", "password": "segredo123"},
+        headers=auth(),
+    )
+
+    assert resp.status_code == 403
+    assert "desativado" in resp.get_json()["error"]
+
+
+def test_an_expired_account_is_told_it_expired(client, monkeypatch):
+    from datetime import timedelta
+    monkeypatch.setattr(
+        "sgd.db.get_user_by_email",
+        lambda e: _com_senha(expires_at=datetime.now(timezone.utc) - timedelta(days=1)),
+    )
+
+    resp = client.post(
+        "/api/admin/authenticate",
+        json={"email": "familia@exemplo.com", "password": "segredo123"},
+        headers=auth(),
+    )
+
+    assert resp.status_code == 403
+    assert "expirou" in resp.get_json()["error"]
+
+
+def test_an_invite_resolves_to_its_account(client, monkeypatch):
+    monkeypatch.setattr("sgd.db.get_user_by_invite_token", lambda t: user_row())
+
+    resp = client.get("/api/admin/invites/convite-abc", headers=auth())
+
+    assert resp.status_code == 200
+    assert resp.get_json()["user"]["display_name"] == "Família"
+
+
+def test_an_unknown_invite_is_a_404(client, monkeypatch):
+    monkeypatch.setattr("sgd.db.get_user_by_invite_token", lambda t: None)
+
+    assert client.get("/api/admin/invites/nao-existe", headers=auth()).status_code == 404
+
+
+def test_an_invite_for_an_expired_account_does_not_open(client, monkeypatch):
+    from datetime import timedelta
+    monkeypatch.setattr(
+        "sgd.db.get_user_by_invite_token",
+        lambda t: user_row(expires_at=datetime.now(timezone.utc) - timedelta(days=1)),
+    )
+
+    # Definir senha ali criaria a expectativa de um acesso que nao funciona.
+    assert client.get("/api/admin/invites/convite-abc", headers=auth()).status_code == 403
+
+
+def test_setting_a_password_stores_a_hash_not_the_password(client, monkeypatch):
+    guardado = {}
+    monkeypatch.setattr("sgd.db.get_user", lambda uid: user_row())
+    monkeypatch.setattr("sgd.db.set_password", lambda uid, h: guardado.update(hash=h))
+
+    resp = client.put(
+        f"/api/admin/users/{UID}/password",
+        json={"password": "senhanova123"},
+        headers=auth(),
+    )
+
+    assert resp.status_code == 200
+    assert "senhanova123" not in guardado["hash"]
+    assert len(guardado["hash"]) > 40
+
+
+def test_a_short_password_is_refused(client, monkeypatch):
+    monkeypatch.setattr("sgd.db.get_user", lambda uid: user_row())
+
+    resp = client.put(
+        f"/api/admin/users/{UID}/password",
+        json={"password": "12345"},
+        headers=auth(),
+    )
+
+    assert resp.status_code == 400
+    assert "6 caracteres" in resp.get_json()["error"]
+
+
+def test_the_credential_endpoints_need_the_service_token(client):
+    assert client.post("/api/admin/authenticate", json={}).status_code == 401
+    assert client.get("/api/admin/invites/x").status_code == 401
+    assert client.put(f"/api/admin/users/{UID}/password", json={}).status_code == 401
