@@ -282,7 +282,7 @@ ainda não configurado fica fechado, e não aberto.
 |---|---|
 | `GET /api/admin/ping` | Confere token e conexão sem tocar em dados |
 | `GET /api/admin/overview` | Contadores do painel |
-| `GET POST /api/admin/users` | Lista e cria contas de família |
+| `GET POST /api/admin/users` | Lista e cria contas de família (com `device`: aparelho, ocioso há quanto tempo, e se está reproduzindo agora) |
 | `GET PATCH DELETE /api/admin/users/<id>` | Lê, edita e remove |
 | `PUT /api/admin/users/<id>/active` | Ativa/desativa (estado explícito) |
 | `POST /api/admin/users/<id>/renew` | Renova por N dias |

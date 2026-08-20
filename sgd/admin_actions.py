@@ -15,6 +15,7 @@ whatever it speaks - a flash message or an HTTP status.
 """
 
 import logging
+import os
 from datetime import datetime, timezone
 
 from sgd import db
@@ -76,6 +77,53 @@ def _forget_cached_drive(drive_account_id) -> None:
     or the next request keeps talking to the old account."""
     from sgd.tenancy import _drive_cache
     _drive_cache.pop(str(drive_account_id), None)
+
+
+# --- device and playback state ------------------------------------------
+
+def _minutes_since(moment) -> float | None:
+    if moment is None:
+        return None
+    return (datetime.now(timezone.utc) - moment).total_seconds() / 60
+
+
+def device_state(user_row: dict) -> dict:
+    """What device this family is on, and whether it is watching right now.
+
+    Two independent signals, because they answer different questions:
+
+    - `device_sessions` records a User-Agent the last time the account
+      opened a title. It says *what* the person is using, and is the only
+      signal at all when the Cloudflare proxy is off.
+    - `playback_sessions` is fed by the Worker while bytes are actually
+      flowing. It says whether a video is playing *now*, which the first
+      one cannot: opening a menu and watching a film look the same to it.
+
+    Both columns come from the JOIN in db.list_users(), so this costs no
+    extra query per row.
+    """
+    device_idle = _minutes_since(user_row.get("device_last_seen"))
+    playback_idle = _minutes_since(user_row.get("playback_last_seen"))
+
+    device_ttl = int(os.environ.get("DEVICE_SESSION_TTL_MINUTES", "240"))
+    playback_ttl = int(os.environ.get("PLAYBACK_IDLE_SECONDS", "180")) / 60
+
+    playing = playback_idle is not None and playback_idle < playback_ttl
+    known = device_idle is not None and device_idle < device_ttl
+
+    return {
+        "label": (user_row.get("device_label") or None) if known else None,
+        "known": known,
+        "idle_minutes": round(device_idle) if device_idle is not None else None,
+        "last_seen": user_row.get("device_last_seen"),
+        "playing": playing,
+        "playing_since": user_row.get("playback_started_at") if playing else None,
+        "playing_minutes": (
+            round(_minutes_since(user_row["playback_started_at"]))
+            if playing and user_row.get("playback_started_at")
+            else None
+        ),
+    }
 
 
 # --- family accounts ----------------------------------------------------

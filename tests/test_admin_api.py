@@ -402,3 +402,114 @@ def test_proxy_can_be_set_explicitly(client, monkeypatch):
 
     assert captured["cf_proxy_enabled"] == "0"
     assert body["proxy"]["enabled"] is False
+
+
+# --- device and playback state ------------------------------------------
+
+def test_device_is_reported_when_recently_seen(client, monkeypatch):
+    from datetime import timedelta
+
+    agora = datetime.now(timezone.utc)
+    monkeypatch.setattr("sgd.db.list_users", lambda: [user_row(
+        device_label="Nuvio 0.8.4 (Android)",
+        device_last_seen=agora - timedelta(minutes=7),
+    )])
+
+    device = client.get("/api/admin/users", headers=auth()).get_json()["users"][0]["device"]
+
+    assert device["known"] is True
+    assert device["label"] == "Nuvio 0.8.4 (Android)"
+    assert device["idle_minutes"] == 7
+    assert device["playing"] is False
+
+
+def test_a_stale_device_is_reported_as_unknown(client, monkeypatch):
+    from datetime import timedelta
+
+    monkeypatch.setattr("sgd.db.list_users", lambda: [user_row(
+        device_label="Aparelho antigo",
+        # Alem do DEVICE_SESSION_TTL_MINUTES padrao (240).
+        device_last_seen=datetime.now(timezone.utc) - timedelta(hours=9),
+    )])
+
+    device = client.get("/api/admin/users", headers=auth()).get_json()["users"][0]["device"]
+
+    # A trava ja expirou: dizer que o aparelho esta conectado seria mentira.
+    assert device["known"] is False
+    assert device["label"] is None
+
+
+def test_playback_is_reported_separately_from_the_device(client, monkeypatch):
+    """Sao perguntas diferentes: `device` diz o que a pessoa usa, `playing`
+    diz se tem video rodando agora. Abrir um menu e assistir um filme sao
+    iguais para o primeiro sinal."""
+    from datetime import timedelta
+
+    agora = datetime.now(timezone.utc)
+    monkeypatch.setattr("sgd.db.list_users", lambda: [user_row(
+        device_label="Stremio (Windows)",
+        device_last_seen=agora - timedelta(minutes=2),
+        playback_started_at=agora - timedelta(minutes=42),
+        playback_last_seen=agora - timedelta(seconds=20),
+    )])
+
+    device = client.get("/api/admin/users", headers=auth()).get_json()["users"][0]["device"]
+
+    assert device["playing"] is True
+    assert device["playing_minutes"] == 42
+
+
+def test_a_paused_playback_stops_counting_as_playing(client, monkeypatch):
+    from datetime import timedelta
+
+    agora = datetime.now(timezone.utc)
+    monkeypatch.setattr("sgd.db.list_users", lambda: [user_row(
+        playback_started_at=agora - timedelta(minutes=50),
+        # Alem do PLAYBACK_IDLE_SECONDS padrao (180s).
+        playback_last_seen=agora - timedelta(minutes=6),
+    )])
+
+    device = client.get("/api/admin/users", headers=auth()).get_json()["users"][0]["device"]
+
+    assert device["playing"] is False
+    assert device["playing_since"] is None
+
+
+def test_a_family_that_never_connected_reports_no_device(client, monkeypatch):
+    monkeypatch.setattr("sgd.db.list_users", lambda: [user_row()])
+
+    device = client.get("/api/admin/users", headers=auth()).get_json()["users"][0]["device"]
+
+    assert device["known"] is False
+    assert device["playing"] is False
+    assert device["idle_minutes"] is None
+
+
+def test_raw_session_columns_do_not_leak_into_the_payload(client, monkeypatch):
+    monkeypatch.setattr("sgd.db.list_users", lambda: [user_row(
+        device_label="Aparelho",
+        device_last_seen=datetime.now(timezone.utc),
+    )])
+
+    user = client.get("/api/admin/users", headers=auth()).get_json()["users"][0]
+
+    # O painel consome `device`; as colunas cruas so confundiriam.
+    assert "device_last_seen" not in user
+    assert "playback_last_seen" not in user
+
+
+def test_a_request_without_any_header_says_that_is_normal(client):
+    """Abrir a URL no navegador sempre cai aqui, e a mensagem antiga
+    ("Credencial invalida") fazia parecer que o token estava errado."""
+    resp = client.get("/api/admin/ping")
+
+    assert resp.status_code == 401
+    assert "não indica problema" in resp.get_json()["error"]
+    assert resp.headers["WWW-Authenticate"].startswith("Bearer")
+
+
+def test_a_wrong_token_still_says_only_that_it_is_invalid(client):
+    resp = client.get("/api/admin/ping", headers={"Authorization": "Bearer errado"})
+
+    assert resp.status_code == 401
+    assert resp.get_json()["error"] == "Credencial inválida."
