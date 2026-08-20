@@ -21,13 +21,20 @@ enabled = true
 # back once ACCOUNTS is deleted.
 TOKEN_ENDPOINT = "https://stream-helium.vercel.app/internal/drive-token"
 
-# Refuse playback URLs that carry no signature. Leave this "false" for the
-# first day after deploying signed URLs: a player that is mid-film, or that
-# cached a stream list from before the change, is still holding an unsigned
-# link and would get cut off. Flip it to "true" once nothing old is in
-# flight - until then an unsigned URL is still an eternal public link to
-# the file, which is the hole signing exists to close.
-REQUIRE_SIGNED_URLS = "false"
+# Refuse playback URLs that carry no signature.
+#
+# This was "false" during the rollout of signed URLs, so that a player
+# mid-film - or one holding a stream list cached from before the change -
+# wouldn't be cut off. That window is over: every URL the addon hands out
+# now carries a signature and an expiry.
+#
+# With this on, a leaked playback link dies on its own, and nobody can
+# craft one for a different file. That is the entire point of signing, and
+# it does nothing while unsigned URLs are still accepted.
+#
+# The only cost of flipping it: anyone still holding a pre-signing link
+# has playback stop, and gets it back by reopening the title.
+REQUIRE_SIGNED_URLS = "true"
 
 # Secrets are NOT declared here and are NOT touched by `wrangler deploy` -
 # they persist across deploys. Set them once:

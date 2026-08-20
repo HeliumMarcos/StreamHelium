@@ -203,6 +203,10 @@ Variables**. Use valores distintos e seguros; nunca coloque segredos no Git.
 > elas não expiram e qualquer pessoa com o link consegue reproduzir o
 > arquivo. Configure o segredo antes de ligar o proxy.
 
+O Worker recusa URLs sem assinatura porque `REQUIRE_SIGNED_URLS = "true"`
+em [`wrangler.toml`](./wrangler.toml). É uma variável do Worker, não um
+secret: fica versionada, e muda por commit em vez de por linha de comando.
+
 Com o proxy ligado, o limite de um dispositivo por família passa a ser
 aplicado durante a reprodução, e não na abertura do título. O Worker
 pergunta ao addon, no máximo uma vez a cada 45 segundos, se aquela sessão
