@@ -54,9 +54,22 @@ def require_api_token(view):
             )
 
         supplied = _bearer_token(request)
-        if not supplied or not hmac.compare_digest(expected, supplied):
-            # No detail about which part failed - a caller without the
-            # token learns nothing beyond "not this".
+        if not supplied:
+            # Distinguishing "sent nothing" from "sent something wrong"
+            # gives an attacker nothing - they already know which one they
+            # did. It does save the owner from reading "invalid credential"
+            # after opening the URL in a browser, which is what happens on
+            # every manual check.
+            resp = _error(
+                "Esta API exige um token de serviço no cabeçalho "
+                "Authorization: Bearer. Abrir esta URL no navegador sempre "
+                "cai aqui, e isso não indica problema.",
+                401,
+            )
+            resp.headers["WWW-Authenticate"] = 'Bearer realm="stream-helium"'
+            return resp
+
+        if not hmac.compare_digest(expected, supplied):
             return _error("Credencial inválida.", 401)
 
         return view(*args, **kwargs)
@@ -165,8 +178,14 @@ def _user_json(row: dict) -> dict:
     """`invite_token` is included: the Catálogo needs it to show the invite
     link. Credentials are not - password_hash never leaves this app, and
     the row already exposes only whether one exists."""
-    data = _row(row, drop=("password_hash", "google_refresh_token", "tmdb_api_key"))
+    data = _row(row, drop=(
+        "password_hash", "google_refresh_token", "tmdb_api_key",
+        # Cru demais para o painel: o estado consolidado vai em `device`.
+        "device_label", "device_last_seen",
+        "playback_started_at", "playback_last_seen",
+    ))
     data["effectively_active"] = db.is_effectively_active(row)
+    data["device"] = {k: _plain(v) for k, v in actions.device_state(row).items()}
     return data
 
 

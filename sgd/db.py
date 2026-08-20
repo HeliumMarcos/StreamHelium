@@ -327,9 +327,14 @@ def list_users() -> list[dict]:
                    u.created_at, u.connected_at,
                    (u.tmdb_api_key IS NOT NULL) AS tmdb_connected,
                    (u.password_hash IS NOT NULL) AS has_password,
-                   da.label AS drive_label
+                   da.label AS drive_label,
+                   ds.device_label, ds.last_seen AS device_last_seen,
+                   ps.started_at AS playback_started_at,
+                   ps.last_seen AS playback_last_seen
             FROM users u
             LEFT JOIN drive_accounts da ON da.id = u.drive_account_id
+            LEFT JOIN device_sessions ds ON ds.user_id = u.id
+            LEFT JOIN playback_sessions ps ON ps.user_id = u.id
             ORDER BY u.created_at DESC
             """
         ).fetchall()
