@@ -330,7 +330,16 @@ def admin_reset_password(uid):
 @app.route("/admin/users/<uid>/free-device", methods=["POST"])
 @require_admin
 def admin_free_device(uid):
+    # Clear both locks. Through the proxy the playback slot is the one that
+    # actually blocks anything, and it normally frees itself within
+    # PLAYBACK_IDLE_SECONDS - but if this button is being pressed, something
+    # is stuck and leaving half the state behind would look like the button
+    # did nothing.
     db.clear_device_session(uid)
+    try:
+        db.clear_playback_session(uid)
+    except Exception as e:
+        logger.warning("Could not clear playback session for %s: %s", uid, e)
     flash("Dispositivo liberado.", "success")
     return redirect("/admin")
 

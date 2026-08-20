@@ -98,7 +98,7 @@ async function handleRequest(request, env) {
   if (parts[0] === "proxy" && parts[2] === "load") {
     const accountId = parts[1]
     const fileId = parts[3]
-    return streamFile(env, request, accountId, fileId)
+    return authorizeAndStream(env, request, url, accountId, fileId)
   }
 
   // Legacy single-account route from before the pool model existed:
@@ -106,10 +106,138 @@ async function handleRequest(request, env) {
   // under the "default" key in ACCOUNTS.
   if (parts[0] === "load") {
     const fileId = parts[1]
-    return streamFile(env, request, "default", fileId)
+    return authorizeAndStream(env, request, url, "default", fileId)
   }
 
   return new Response("404 Not Found!", { status: 404 })
+}
+
+// A playback URL carries ?u=<viewer>&n=<session>&e=<expiry>&s=<signature>,
+// signed by the addon (see sgd/signing.py). Two things follow from it:
+// the URL stops being an eternal public link to the file, and the Worker
+// finally knows which viewer the bytes are for - which is what makes a
+// real one-device-at-a-time limit possible, since the addon can be asked
+// whether this session still holds that viewer's slot.
+async function authorizeAndStream(env, request, url, accountId, fileId) {
+  const viewer = url.searchParams.get("u")
+  const session = url.searchParams.get("n")
+  const expiry = url.searchParams.get("e")
+  const signature = url.searchParams.get("s")
+
+  if (!viewer || !session || !expiry || !signature) {
+    // Unsigned. Old links handed out before signing existed still look
+    // like this, so they keep working until REQUIRE_SIGNED_URLS is turned
+    // on - flip it once no player is holding a pre-signing URL any more.
+    if (env.REQUIRE_SIGNED_URLS === "true") {
+      console.error(`Rejected unsigned request for file ${fileId}`)
+      return new Response("403 Unsigned playback URL", { status: 403 })
+    }
+    return streamFile(env, request, accountId, fileId)
+  }
+
+  const valid = await verifySignature(env, {
+    accountId, fileId, viewer, session, expiry, signature,
+  })
+  if (!valid) {
+    console.error(`Rejected bad or expired signature for file ${fileId}`)
+    return new Response("403 Invalid or expired playback URL", { status: 403 })
+  }
+
+  const slot = await claimPlaybackSlot(env, viewer, session)
+  if (slot === "taken") {
+    return new Response("403 Already playing on another device", { status: 403 })
+  }
+
+  return streamFile(env, request, accountId, fileId)
+}
+
+async function verifySignature(env, { accountId, fileId, viewer, session, expiry, signature }) {
+  const secret = env.TOKEN_ENDPOINT_SECRET
+  if (!secret) {
+    console.error("Signed URL received but TOKEN_ENDPOINT_SECRET is not set")
+    return false
+  }
+
+  const expiresAt = parseInt(expiry, 10)
+  if (!Number.isFinite(expiresAt) || expiresAt < Date.now() / 1000) return false
+
+  // Must match sgd/signing.py exactly: HMAC-SHA256 over
+  // account:file:user:session:expiry, base64url, padding stripped.
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  )
+  const mac = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(`${accountId}:${fileId}:${viewer}:${session}:${expiresAt}`),
+  )
+  const expected = btoa(String.fromCharCode(...new Uint8Array(mac)))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "")
+
+  return timingSafeEqual(expected, signature)
+}
+
+function timingSafeEqual(a, b) {
+  if (a.length !== b.length) return false
+  let diff = 0
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i)
+  return diff === 0
+}
+
+// Verdicts are cached per viewer+session so a two-hour film doesn't turn
+// into thousands of calls to the addon - a player issues a fresh range
+// request for every seek and every buffer top-up. The cache window has to
+// stay well under PLAYBACK_IDLE_SECONDS on the addon side, or a viewer
+// would let their own slot go stale and evict themselves.
+const slotCache = new Map()
+const SLOT_CACHE_MS = 45_000
+
+async function claimPlaybackSlot(env, viewer, session) {
+  if (!env.TOKEN_ENDPOINT || !env.TOKEN_ENDPOINT_SECRET) return "granted"
+
+  const key = `${viewer}|${session}`
+  const cached = slotCache.get(key)
+  if (cached && cached.until > Date.now()) return cached.verdict
+
+  const base = env.TOKEN_ENDPOINT.replace(/\/drive-token\/?$/, "").replace(/\/$/, "")
+  let resp
+  try {
+    resp = await fetch(`${base}/playback/${encodeURIComponent(viewer)}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.TOKEN_ENDPOINT_SECRET}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ session }),
+    })
+  } catch (e) {
+    // Fail open, like the addon does on a database error. The limit is a
+    // convenience; it isn't worth taking the household's video down for.
+    console.error(`Playback slot check unreachable (${e.message}) - allowing`)
+    return "granted"
+  }
+
+  if (resp.status === 409) {
+    // Don't cache a denial for as long as a grant: the other device may
+    // stop at any moment, and a viewer retrying shouldn't wait out a stale
+    // no.
+    slotCache.set(key, { verdict: "taken", until: Date.now() + 5_000 })
+    return "taken"
+  }
+
+  if (!resp.ok) {
+    console.error(`Playback slot check returned ${resp.status} - allowing`)
+    return "granted"
+  }
+
+  slotCache.set(key, { verdict: "granted", until: Date.now() + SLOT_CACHE_MS })
+  return "granted"
 }
 
 async function streamFile(env, request, accountId, fileId) {

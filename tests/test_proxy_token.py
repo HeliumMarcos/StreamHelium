@@ -105,3 +105,68 @@ def test_failed_refresh_is_502(client, monkeypatch):
     resp = client.get(f"/internal/drive-token/{ACCOUNT}", headers=_auth())
 
     assert resp.status_code == 502
+
+
+# --- playback slot ---------------------------------------------------------
+
+def test_playback_claim_grants_and_reports_renewal(client, monkeypatch):
+    monkeypatch.setenv("PROXY_SHARED_SECRET", "shared-secret")
+    monkeypatch.setattr("sgd.db.claim_playback_session", lambda *a: True)
+
+    resp = client.post(
+        f"/internal/playback/{ACCOUNT}", headers=_auth(), json={"session": "sess-1"}
+    )
+
+    assert resp.status_code == 200
+    assert resp.get_json()["granted"] is True
+    assert resp.get_json()["renew_after"] > 0
+
+
+def test_playback_claim_is_409_when_another_session_holds_the_slot(client, monkeypatch):
+    monkeypatch.setenv("PROXY_SHARED_SECRET", "shared-secret")
+    monkeypatch.setattr("sgd.db.claim_playback_session", lambda *a: False)
+
+    resp = client.post(
+        f"/internal/playback/{ACCOUNT}", headers=_auth(), json={"session": "sess-2"}
+    )
+
+    assert resp.status_code == 409
+    assert resp.get_json()["granted"] is False
+
+
+def test_playback_claim_needs_a_session(client, monkeypatch):
+    monkeypatch.setenv("PROXY_SHARED_SECRET", "shared-secret")
+
+    resp = client.post(f"/internal/playback/{ACCOUNT}", headers=_auth(), json={})
+
+    assert resp.status_code == 400
+
+
+def test_playback_claim_rejects_wrong_secret(client, monkeypatch):
+    monkeypatch.setenv("PROXY_SHARED_SECRET", "shared-secret")
+
+    resp = client.post(
+        f"/internal/playback/{ACCOUNT}",
+        headers=_auth("wrong"),
+        json={"session": "sess-1"},
+    )
+
+    assert resp.status_code == 401
+
+
+def test_playback_claim_fails_open_on_db_error(client, monkeypatch):
+    """The limit is a convenience. A database hiccup must not stop the
+    household from watching anything."""
+    monkeypatch.setenv("PROXY_SHARED_SECRET", "shared-secret")
+
+    def boom(*a):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr("sgd.db.claim_playback_session", boom)
+
+    resp = client.post(
+        f"/internal/playback/{ACCOUNT}", headers=_auth(), json={"session": "sess-1"}
+    )
+
+    assert resp.status_code == 200
+    assert resp.get_json() == {"granted": True, "degraded": True}

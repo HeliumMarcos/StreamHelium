@@ -198,7 +198,7 @@ def test_stream_blocked_when_device_limit_reached(client, monkeypatch):
 def test_stream_allowed_when_device_matches(client, monkeypatch):
     _patch_tenant(monkeypatch, gdrive=object())
     monkeypatch.setattr("sgd.db.touch_device_session", lambda *a, **k: True)
-    monkeypatch.setattr("sgd.routes.get_streams", lambda gdrive, t, sid: iter(['{"streams":[]}']))
+    monkeypatch.setattr("sgd.routes.get_streams", lambda gdrive, t, sid, **kw: iter(['{"streams":[]}']))
 
     resp = client.get(f"/u/{TEST_USER_ID}/stream/movie/tt0111161.json")
 
@@ -210,7 +210,7 @@ def test_device_check_fails_open_on_db_error(client, monkeypatch):
     """A DB hiccup on the device check must not break playback for
     everyone - it should allow the request through."""
     _patch_tenant(monkeypatch, gdrive=object())
-    monkeypatch.setattr("sgd.routes.get_streams", lambda gdrive, t, sid: iter(['{"streams":[]}']))
+    monkeypatch.setattr("sgd.routes.get_streams", lambda gdrive, t, sid, **kw: iter(['{"streams":[]}']))
 
     def boom(*a, **k):
         raise RuntimeError("db down")

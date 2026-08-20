@@ -17,6 +17,10 @@ The endpoint hands out a real Drive access token, so it is guarded by a
 shared secret (`PROXY_SHARED_SECRET`, the same value configured on the
 Worker) and never enabled implicitly - no secret set means the route
 answers 503 rather than answering at all.
+
+The same module also carries /internal/playback/<viewer_id>, the other
+thing the Worker asks the addon while it serves a stream: whether this
+viewer's single playback slot is theirs to keep.
 """
 
 import hmac
@@ -27,7 +31,7 @@ from datetime import datetime
 
 from flask import jsonify, request
 
-from sgd import app, tenancy
+from sgd import app, db, tenancy
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +44,13 @@ VALID_ACCOUNT_ID = re.compile(
 # what it gets, and a token that expires seconds later would have it
 # re-fetching on every request.
 MIN_LIFETIME_SECONDS = 60
+
+# How long a playback session may go without the Worker checking in before
+# another device is allowed to take the slot. Has to be comfortably longer
+# than the Worker's own check-in interval, or a viewer would evict
+# themselves. Also absorbs pauses: a paused player stops requesting bytes,
+# so this is how long you can pause before someone else can take over.
+PLAYBACK_IDLE_SECONDS = int(os.environ.get("PLAYBACK_IDLE_SECONDS", "180"))
 
 
 def _is_authorized(req):
@@ -100,3 +111,48 @@ def drive_token(account_id):
     response = jsonify({"access_token": access_token, "expires_in": expires_in})
     response.headers["Cache-Control"] = "no-store"
     return response
+
+
+# The path parameter is deliberately not called user_id: routes.py has a
+# before_request hook that treats any route with a user_id argument as a
+# tenant-scoped one and loads the viewer plus a Drive client from the
+# database. This endpoint needs neither, and gets called repeatedly
+# during playback.
+@app.route("/internal/playback/<viewer_id>", methods=["POST"])
+def playback_claim(viewer_id):
+    """Called by the Worker while a viewer streams, to keep or acquire that
+    viewer's single playback slot.
+
+    POST so it's plainly a mutation - it refreshes the slot's timestamp on
+    every successful call, which is what lets an abandoned session expire
+    on its own.
+
+    409 means somebody else is watching. The Worker turns that into a 403
+    for the player."""
+    authorized = _is_authorized(request)
+    if authorized is None:
+        return jsonify({"error": "proxy_token_endpoint_disabled"}), 503
+    if not authorized:
+        return jsonify({"error": "unauthorized"}), 401
+
+    if not VALID_ACCOUNT_ID.match(viewer_id):
+        return jsonify({"error": "unknown_user"}), 404
+
+    session_id = (request.get_json(silent=True) or {}).get("session")
+    if not session_id or not isinstance(session_id, str):
+        return jsonify({"error": "missing_session"}), 400
+
+    try:
+        granted = db.claim_playback_session(
+            viewer_id, session_id, PLAYBACK_IDLE_SECONDS
+        )
+    except Exception as e:
+        # Fail open, same as the stream-listing device check: a database
+        # hiccup shouldn't stop the household from watching anything.
+        logger.warning("Playback claim failed, allowing playback: %s", e)
+        return jsonify({"granted": True, "degraded": True})
+
+    if not granted:
+        return jsonify({"granted": False}), 409
+
+    return jsonify({"granted": True, "renew_after": PLAYBACK_IDLE_SECONDS // 3})

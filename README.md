@@ -192,10 +192,27 @@ Variables**. Use valores distintos e seguros; nunca coloque segredos no Git.
 | `GOOGLE_CLIENT_SECRET` | Sim | Client Secret OAuth Web do Google. |
 | `TMDB_API_KEY` | Não | Chave legada de fallback; prefira o pool em `/admin/tmdb`. |
 | `CF_PROXY_URL` | Não | URL base do Worker Cloudflare. |
-| `PROXY_SHARED_SECRET` | Se usar o proxy | Segredo que protege o endpoint interno de tokens. |
-| `DEVICE_SESSION_TTL_MINUTES` | Não | Janela do dispositivo ativo; padrão: `240`. |
+| `PROXY_SHARED_SECRET` | Se usar o proxy | Protege o endpoint interno de tokens e assina as URLs de reprodução. |
+| `PLAYBACK_IDLE_SECONDS` | Não | Silêncio tolerado antes que outro dispositivo assuma a vez; padrão: `180`. |
+| `DEVICE_SESSION_TTL_MINUTES` | Não | Limite antigo, por impressão do dispositivo; padrão: `240`. Só vale com o proxy desligado. |
 | `ADMIN_WHATSAPP_NUMBER` | Não | Número com DDI/DDD usado nos links de suporte. |
 | `LOG_LEVEL` | Não | Nível de log; padrão: `INFO`. |
+
+> Sem `PROXY_SHARED_SECRET`, o addon emite URLs de proxy sem assinatura:
+> elas não expiram e qualquer pessoa com o link consegue reproduzir o
+> arquivo. Configure o segredo antes de ligar o proxy.
+
+Com o proxy ligado, o limite de um dispositivo por família passa a ser
+aplicado durante a reprodução, e não na abertura do título. O Worker
+pergunta ao addon, no máximo uma vez a cada 45 segundos, se aquela sessão
+ainda tem a vez. Uma sessão abandonada se libera sozinha em
+`PLAYBACK_IDLE_SECONDS` — mas uma pausa mais longa que esse tempo também
+permite que outro dispositivo assuma, porque um player pausado com buffer
+cheio para de pedir bytes.
+
+Os dois lados falham liberando: se o banco ficar fora do ar ou o addon
+ficar inacessível, a reprodução continua. O limite é uma conveniência e
+não vale derrubar o vídeo da casa inteira.
 
 Gere os segredos localmente:
 
