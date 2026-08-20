@@ -53,24 +53,42 @@ class IMDb:
         self.imdb_html_url = f"imdb.com/title/{self.id}/releaseinfo?ref_=tt_dt_aka"
 
         self.fetch_dest = "None"
-        
+
+        # The Catálogo first: for anything in the collection it already
+        # has the curated title, original title and year - named by the
+        # same person who named the files in the Drive.
+        if self.get_meta_from_catalog():
+            self.fetch_dest = "CATALOG"
+
+        # TMDB and Cinemeta keep running even when the catalogue answered.
+        # They are fast, and each contributes title variants the catalogue
+        # does not have - an English release title, an alternate spelling.
+        # Every extra variant is another chance of matching how a file was
+        # actually named in the Drive, and dropping them to save two quick
+        # calls would trade "found the film" for "answered faster".
         if self.get_meta_from_tmdb():
-            self.fetch_dest = "TMDB_API"
-            
+            if self.fetch_dest == "None":
+                self.fetch_dest = "TMDB_API"
+
         if self.get_meta_from_cinemeta():
             if self.fetch_dest == "None":
                 self.fetch_dest = "CINEMETA"
-        
+
+        # The two IMDb sources are the slow ones, and the HTML one is a
+        # scraper that breaks whenever the page changes. They exist as a
+        # last resort, so they only run when nothing else produced a
+        # title - which, for anything catalogued, is never.
         if not self.titles and self.get_meta_from_imdb_sg():
             if self.fetch_dest == "None":
                 self.fetch_dest = "IMDB_SG_API"
 
-        try:
-            self.get_meta_from_imdb_html()
-            if self.fetch_dest == "None" and self.titles:
-                self.fetch_dest = "IMDB_HTML"
-        except Exception as e:
-            logger.warning("Failed to read IMDb HTML page for %s: %s", self.id, e)
+        if not self.titles:
+            try:
+                self.get_meta_from_imdb_html()
+                if self.fetch_dest == "None" and self.titles:
+                    self.fetch_dest = "IMDB_HTML"
+            except Exception as e:
+                logger.warning("Failed to read IMDb HTML page for %s: %s", self.id, e)
 
         if not self.titles:
             self.fetch_dest = "NULL"
@@ -91,6 +109,38 @@ class IMDb:
                     cleaned_titles.append(unaccented_t)
                     
         self.titles = cleaned_titles
+
+    def get_meta_from_catalog(self):
+        """Curated metadata for anything in the Catálogo.
+
+        Mirrors get_meta_from_tmdb: the raw titles arrive from there and
+        the variants are built here, with the same `sanitize`, so both
+        paths produce exactly the same shape.
+        """
+        from sgd import catalog
+
+        data = catalog.lookup(self.id)
+        if not data:
+            return False
+
+        original = data.get("original_name")
+        if original:
+            self.titles.append(ut.sanitize(original))
+            if not self.original_title:
+                self.original_title = ut.sanitize(original, lower=False)
+
+        name = data.get("name")
+        if name:
+            self.titles.append(ut.sanitize(name))
+            if not self.name:
+                self.name = ut.sanitize(name, lower=False)
+
+        year = str(data.get("year") or "")
+        if year and ut.is_year(year):
+            self.year = year
+
+        logger.info("Metadata for %s came from the catalogue.", self.id)
+        return bool(self.titles)
 
     def get_meta_from_tmdb(self):
         tmdb_key = _tmdb_api_key()
