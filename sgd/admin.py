@@ -53,20 +53,9 @@ def _flash_errors(redirect_to):
     return run
 
 
-def _live_drive_status(drive_account_id):
-    """Best-effort - never raises, since one broken account shouldn't take
-    down the whole admin page."""
-    try:
-        from sgd.tenancy import _get_drive_instance
-        from sgd.routes import drive_status
-
-        gdrive = _get_drive_instance(str(drive_account_id))
-        if gdrive is None:
-            return None
-        return drive_status(gdrive)
-    except Exception as e:
-        logger.warning("Could not fetch live status for drive %s: %s", drive_account_id, e)
-        return None
+# Mantido como alias: a implementacao vive em admin_actions, partilhada
+# com a API que o Catalogo consome.
+_live_drive_status = actions.live_drive_status
 
 
 def _admin_password():
