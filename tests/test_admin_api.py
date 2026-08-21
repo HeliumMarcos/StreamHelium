@@ -731,3 +731,59 @@ def test_a_broken_drive_does_not_take_down_the_screen(client, monkeypatch):
 
 def test_drive_status_needs_the_service_token(client):
     assert client.get("/api/admin/drives/status").status_code == 401
+
+
+# --- historico de titulos -----------------------------------------------
+
+def test_most_viewed_counts_people_not_opens(client, monkeypatch):
+    """Um titulo que alguem reabriu vinte vezes nao e mais popular que um
+    que vinte pessoas abriram uma vez."""
+    capturado = {}
+    monkeypatch.setattr("sgd.db.most_viewed_titles", lambda limit: capturado.update(limit=limit) or [
+        {"imdb_id": "tt0137523", "viewers": 5, "opens": 9,
+         "last_seen": datetime(2026, 8, 1, tzinfo=timezone.utc)},
+    ])
+
+    titulos = client.get("/api/admin/views/top", headers=auth()).get_json()["titles"]
+
+    assert titulos[0]["imdb_id"] == "tt0137523"
+    assert titulos[0]["viewers"] == 5
+    assert titulos[0]["last_seen"].startswith("2026-08-01")
+
+
+def test_the_top_limit_is_capped(client, monkeypatch):
+    capturado = {}
+    monkeypatch.setattr("sgd.db.most_viewed_titles", lambda limit: capturado.update(limit=limit) or [])
+
+    client.get("/api/admin/views/top?limit=99999", headers=auth())
+
+    assert capturado["limit"] <= 200
+
+
+def test_a_nonsense_limit_falls_back_to_the_default(client, monkeypatch):
+    capturado = {}
+    monkeypatch.setattr("sgd.db.most_viewed_titles", lambda limit: capturado.update(limit=limit) or [])
+
+    client.get("/api/admin/views/top?limit=abacaxi", headers=auth())
+
+    assert capturado["limit"] == 60
+
+
+def test_what_a_user_has_seen_is_a_plain_list(client, monkeypatch):
+    monkeypatch.setattr("sgd.db.get_user", lambda uid: user_row())
+    monkeypatch.setattr("sgd.db.titles_seen_by", lambda uid: ["tt0137523", "tt0111161"])
+
+    vistos = client.get(f"/api/admin/views/user/{UID}", headers=auth()).get_json()["seen"]
+
+    assert vistos == ["tt0137523", "tt0111161"]
+
+
+def test_asking_about_an_unknown_user_is_a_404(client, monkeypatch):
+    monkeypatch.setattr("sgd.db.get_user", lambda uid: None)
+
+    assert client.get(f"/api/admin/views/user/{UID}", headers=auth()).status_code == 404
+
+
+def test_the_view_endpoints_need_the_service_token(client):
+    assert client.get("/api/admin/views/top").status_code == 401
+    assert client.get(f"/api/admin/views/user/{UID}").status_code == 401

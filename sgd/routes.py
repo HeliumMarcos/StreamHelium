@@ -329,6 +329,10 @@ def addon_stream(user_id, stream_type, stream_id):
         })
         return common_headers(resp)
 
+    # Antes de buscar: se a busca falhar, a pessoa ainda abriu o titulo, e
+    # e isso que o catalogo de "voce ainda nao viu" precisa saber.
+    _record_view(user_id, stream_id)
+
     try:
         resp = Response(
             response=get_streams(
@@ -341,6 +345,23 @@ def addon_stream(user_id, stream_type, stream_id):
     except MetadataNotFound as e:
         logger.info("%s", e)
         abort(404)
+
+
+def _record_view(user_id, stream_id):
+    """Marca que esta conta abriu este titulo.
+
+    So o id base: para series, tt1234567:2:5 e o mesmo titulo que
+    tt1234567:1:1, e o catalogo raciocina em titulos, nao em episodios.
+
+    Ids tmdb: sao ignorados. O acervo do Catalogo e todo indexado por
+    IMDb, entao um id tmdb nunca casaria com nada la — guardar so criaria
+    linhas mortas.
+    """
+    base = split_stream_id(stream_id)[0].lower()
+    if not VALID_IMDB_ID.match(base):
+        return
+
+    db.record_title_view(user_id, base)
 
 
 def common_headers(resp_obj):
