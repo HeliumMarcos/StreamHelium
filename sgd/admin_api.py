@@ -427,6 +427,39 @@ def api_delete_tmdb_key(tid):
     return _ok({"deleted": True})
 
 
+# --- o que foi assistido ------------------------------------------------
+#
+# Alimenta os catalogos "mais assistidos" e "voce ainda nao viu" do
+# Catalogo. O que se registra e a ABERTURA de um titulo, nao reproducao
+# confirmada — ver o comentario da tabela em sgd/db.py.
+
+@endpoint("/views/top")
+def api_most_viewed():
+    """Titulos mais abertos, somando todas as contas.
+
+    Conta pessoas e nao aberturas: um titulo que alguem reabriu vinte
+    vezes nao e mais popular que um que vinte pessoas abriram uma vez.
+    """
+    try:
+        limite = min(200, max(1, int(request.args.get("limit", 60))))
+    except (TypeError, ValueError):
+        limite = 60
+
+    return _ok({"titles": [
+        {k: _plain(v) for k, v in dict(row).items()}
+        for row in db.most_viewed_titles(limite)
+    ]})
+
+
+@endpoint("/views/user/<uid>")
+def api_titles_seen(uid):
+    """Ids que esta conta ja abriu, para o Catalogo montar o inverso."""
+    if not db.get_user(uid):
+        return _error("Conta nao encontrada.", 404)
+
+    return _ok({"seen": db.titles_seen_by(uid)})
+
+
 # --- settings -----------------------------------------------------------
 
 @endpoint("/settings")

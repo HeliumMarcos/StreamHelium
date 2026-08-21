@@ -246,7 +246,8 @@ idempotente as tabelas:
 - `users`;
 - `tmdb_keys`;
 - `device_sessions`;
-- `settings`.
+- `settings`;
+- `title_views`.
 
 As migrações existentes são aditivas e usam `ADD COLUMN IF NOT EXISTS`.
 
@@ -327,6 +328,8 @@ ainda não configurado fica fechado, e não aberto.
 | `PUT /api/admin/users/<id>/password` | Define a senha |
 | `PUT /api/admin/tmdb-keys/<id>/active` | Ativa/desativa |
 | `DELETE /api/admin/tmdb-keys/<id>` | Remove |
+| `GET /api/admin/views/top` | Títulos mais abertos, somando todas as contas |
+| `GET /api/admin/views/user/<id>` | Ids que uma conta já abriu |
 | `GET /api/admin/settings` | Estado do proxy |
 | `PUT /api/admin/settings/proxy` | Liga/desliga o proxy |
 

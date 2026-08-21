@@ -42,3 +42,44 @@ def test_valid_stream_ids(stream_id):
 )
 def test_invalid_stream_ids(stream_id):
     assert not is_valid_stream_id(stream_id)
+
+
+# --- registro de abertura de titulo -------------------------------------
+
+def test_a_series_episode_is_recorded_as_its_title(monkeypatch):
+    """tt1234567:2:5 e o mesmo titulo que tt1234567:1:1 — o catalogo
+    raciocina em titulos, nao em episodios."""
+    from sgd.routes import _record_view
+
+    registrado = []
+    monkeypatch.setattr("sgd.db.record_title_view", lambda u, i: registrado.append((u, i)))
+
+    _record_view("user-1", "tt0903747:2:5")
+
+    assert registrado == [("user-1", "tt0903747")]
+
+
+def test_a_tmdb_id_is_not_recorded(monkeypatch):
+    """O acervo do Catalogo e todo indexado por IMDb: um id tmdb nunca
+    casaria com nada la, e guardar so criaria linhas mortas."""
+    from sgd.routes import _record_view
+
+    registrado = []
+    monkeypatch.setattr("sgd.db.record_title_view", lambda u, i: registrado.append((u, i)))
+
+    _record_view("user-1", "tmdb:550")
+
+    assert registrado == []
+
+
+def test_recording_a_view_never_breaks_playback(monkeypatch):
+    """Contabilizar uma visualizacao nao vale interromper uma reproducao."""
+    import sgd.db as db
+
+    def explode(*a, **k):
+        raise Exception("banco fora do ar")
+
+    monkeypatch.setattr("sgd.db.get_conn", explode)
+
+    # Nao levanta.
+    db.record_title_view("user-1", "tt0137523")

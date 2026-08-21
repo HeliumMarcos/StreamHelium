@@ -146,6 +146,36 @@ def init_schema():
             """
         )
 
+        # Que titulos cada conta abriu, para o Catalogo montar "mais
+        # assistidos" e "voce ainda nao viu".
+        #
+        # Registra ABERTURA, nao reproducao confirmada: o sinal e a
+        # requisicao de streams, que acontece quando alguem abre um titulo
+        # no Stremio. Saber se o video realmente tocou exigiria carregar o
+        # id do titulo pela URL assinada ate o Worker e de volta — mexer de
+        # novo no caminho que serve o video, por uma precisao que nao muda
+        # nenhuma decisao aqui: ninguem abre um titulo que nao pretende
+        # ver.
+        #
+        # Guarda o minimo: quem, o que, quantas vezes, e quando foi a
+        # primeira e a ultima. Sem IP, sem aparelho, sem historico
+        # detalhado.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS title_views (
+                user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                imdb_id TEXT NOT NULL,
+                views INTEGER NOT NULL DEFAULT 1,
+                first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+                last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+                PRIMARY KEY (user_id, imdb_id)
+            );
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_title_views_imdb ON title_views (imdb_id);"
+        )
+
 
 def _is_expired(user_row: dict) -> bool:
     expires_at = user_row.get("expires_at")
@@ -620,6 +650,60 @@ def clear_playback_session(user_id: str) -> None:
 
 
 # --- generic settings (key/value) ------------------------------------------
+
+def record_title_view(user_id: str, imdb_id: str) -> None:
+    """Marca que esta conta abriu este titulo.
+
+    Nunca levanta: contabilizar uma visualizacao nao vale interromper uma
+    reproducao. Um numero errado no catalogo de mais assistidos e menos
+    grave que um filme que nao abre.
+    """
+    try:
+        with get_conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO title_views (user_id, imdb_id)
+                VALUES (%s, %s)
+                ON CONFLICT (user_id, imdb_id) DO UPDATE
+                    SET views = title_views.views + 1,
+                        last_seen = now()
+                """,
+                (user_id, imdb_id),
+            )
+    except Exception as e:
+        logger.warning("Could not record view of %s by %s: %s", imdb_id, user_id, e)
+
+
+def most_viewed_titles(limit: int = 60) -> list[dict]:
+    """Titulos mais abertos, somando todas as contas.
+
+    Conta PESSOAS e nao aberturas: um titulo que uma pessoa reabriu vinte
+    vezes nao e mais popular que um que vinte pessoas abriram uma vez.
+    """
+    with get_conn() as conn:
+        return conn.execute(
+            """
+            SELECT imdb_id,
+                   COUNT(DISTINCT user_id) AS viewers,
+                   SUM(views) AS opens,
+                   MAX(last_seen) AS last_seen
+            FROM title_views
+            GROUP BY imdb_id
+            ORDER BY viewers DESC, opens DESC, last_seen DESC
+            LIMIT %s
+            """,
+            (limit,),
+        ).fetchall()
+
+
+def titles_seen_by(user_id: str) -> list[str]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT imdb_id FROM title_views WHERE user_id = %s", (user_id,)
+        ).fetchall()
+
+    return [r["imdb_id"] for r in rows]
+
 
 def get_setting(key: str, default: str | None = None) -> str | None:
     with get_conn() as conn:
