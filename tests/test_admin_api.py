@@ -678,3 +678,56 @@ def test_the_credential_endpoints_need_the_service_token(client):
     assert client.post("/api/admin/authenticate", json={}).status_code == 401
     assert client.get("/api/admin/invites/x").status_code == 401
     assert client.put(f"/api/admin/users/{UID}/password", json={}).status_code == 401
+
+
+# --- estado ao vivo dos Drives ------------------------------------------
+
+def test_drive_status_reports_each_account(client, monkeypatch):
+    monkeypatch.setattr("sgd.db.list_drive_accounts", lambda: [
+        {"id": DID, "label": "Drive 1", "active": True, "connected": True},
+    ])
+    monkeypatch.setattr("sgd.admin_actions.live_drive_status", lambda did: {
+        "connected": True, "account": "h****s@gmail.com",
+        "usage_human": "412 GB", "limit_human": "2 TB", "usage_pct": 20.6,
+    })
+
+    estados = client.get("/api/admin/drives/status", headers=auth()).get_json()["statuses"]
+
+    assert estados[DID]["usage_human"] == "412 GB"
+    assert estados[DID]["usage_pct"] == 20.6
+
+
+def test_a_disconnected_drive_is_not_asked_about(client, monkeypatch):
+    """Perguntar ao Google por uma conta que nunca conectou so gasta uma
+    chamada para receber erro."""
+    perguntou = []
+    monkeypatch.setattr("sgd.db.list_drive_accounts", lambda: [
+        {"id": DID, "label": "Nunca conectou", "active": True, "connected": False},
+    ])
+    monkeypatch.setattr("sgd.admin_actions.live_drive_status", lambda did: perguntou.append(did))
+
+    estados = client.get("/api/admin/drives/status", headers=auth()).get_json()["statuses"]
+
+    assert estados[DID] is None
+    assert perguntou == []
+
+
+def test_a_broken_drive_does_not_take_down_the_screen(client, monkeypatch):
+    """E justamente nesta tela que se conserta a conta quebrada."""
+    monkeypatch.setattr("sgd.db.list_drive_accounts", lambda: [
+        {"id": DID, "label": "Quebrado", "active": True, "connected": True},
+    ])
+    monkeypatch.setattr("sgd.admin_actions.live_drive_status", lambda did: {
+        "connected": False, "error_code": "authorization_expired",
+        "error": "Autorização do Google expirada ou revogada. Reconecte esta conta.",
+        "reconnect_required": True,
+    })
+
+    resp = client.get("/api/admin/drives/status", headers=auth())
+
+    assert resp.status_code == 200
+    assert resp.get_json()["statuses"][DID]["reconnect_required"] is True
+
+
+def test_drive_status_needs_the_service_token(client):
+    assert client.get("/api/admin/drives/status").status_code == 401

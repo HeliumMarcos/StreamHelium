@@ -376,6 +376,21 @@ def api_create_drive():
     }, 201)
 
 
+@endpoint("/drives/status")
+def api_drive_status():
+    """Espaco em disco e conexao de cada conta, ao vivo.
+
+    Separado de /drives porque custa uma chamada ao Google por conta: a
+    tela do Catalogo abre com a listagem barata e preenche isto depois.
+    """
+    estados = {}
+    for row in db.list_drive_accounts():
+        did = str(row["id"])
+        estados[did] = actions.live_drive_status(did) if row["connected"] and row["active"] else None
+
+    return _ok({"statuses": {k: (v or None) for k, v in estados.items()}})
+
+
 @endpoint("/drives/<did>/active", methods=["PUT"])
 def api_toggle_drive(did):
     return _ok({"drive": _drive_json(actions.toggle_drive(did))})

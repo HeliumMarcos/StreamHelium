@@ -355,6 +355,30 @@ def delete_user(uid: str) -> None:
 
 # --- Drive account pool -------------------------------------------------
 
+def live_drive_status(drive_account_id) -> dict | None:
+    """Estado real de uma conta Drive, perguntando ao Google.
+
+    Custa uma chamada de rede por conta, por isso fica fora da listagem:
+    quem quiser espaco em disco pede de proposito, e a tela preenche
+    depois de ja ter aberto.
+
+    Nunca levanta: uma conta quebrada nao pode derrubar a tela inteira,
+    que e justamente onde se conserta a conta quebrada.
+    """
+    try:
+        from sgd.tenancy import _get_drive_instance
+        from sgd.routes import drive_status
+
+        gdrive = _get_drive_instance(str(drive_account_id))
+        if gdrive is None:
+            return None
+        return drive_status(gdrive)
+    except Exception as e:
+        logger.warning("Could not fetch live status for drive %s: %s", drive_account_id, e)
+        return None
+
+
+
 def create_drive(label: str | None) -> dict:
     label = _clean_optional(label)
     if not label:

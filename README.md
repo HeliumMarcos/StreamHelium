@@ -318,6 +318,7 @@ ainda não configurado fica fechado, e não aberto.
 | `DELETE /api/admin/users/<id>/password` | Reseta a senha |
 | `DELETE /api/admin/users/<id>/device` | Libera as duas travas de dispositivo |
 | `GET POST /api/admin/drives` | Lista e cria contas Drive |
+| `GET /api/admin/drives/status` | Espaço em disco e conexão de cada conta, ao vivo |
 | `PUT /api/admin/drives/<id>/active` | Ativa/desativa |
 | `DELETE /api/admin/drives/<id>` | Remove e redistribui as famílias |
 | `GET POST /api/admin/tmdb-keys` | Lista e cria chaves |
