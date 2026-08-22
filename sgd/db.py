@@ -107,6 +107,24 @@ def init_schema():
         conn.execute(
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS idempotency_key TEXT;"
         )
+        # Identificador do addon, trocavel.
+        #
+        # Ate agora o endereco do addon carregava o `id` da conta, que e
+        # imutavel: trocar o link no Catalogo nao revogava nada, porque o
+        # endereco da Vercel continuava valendo para sempre. Quem tivesse
+        # visto o 302 uma vez assistia indefinidamente.
+        #
+        # NAO e preenchido para contas antigas de proposito. Enquanto uma
+        # conta nao tem token, o `id` continua funcionando - senao publicar
+        # isto derrubaria todo mundo antes de o Catalogo saber os tokens
+        # novos. A conta migra quando alguem rotaciona o link dela.
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS stream_token TEXT;"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS users_stream_token_idx "
+            "ON users (stream_token) WHERE stream_token IS NOT NULL;"
+        )
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS users_idempotency_key_idx "
             "ON users (idempotency_key) WHERE idempotency_key IS NOT NULL;"
@@ -365,7 +383,7 @@ def pick_least_loaded_drive_account() -> dict | None:
 
 USER_COLUMNS = """id, email, display_name, active, invite_token,
                   drive_account_id, drive_account_pinned, expires_at,
-                  created_at, connected_at,
+                  created_at, connected_at, stream_token,
                   (tmdb_api_key IS NOT NULL) AS tmdb_connected"""
 
 
@@ -402,12 +420,14 @@ def create_user(
             f"""
             INSERT INTO users (email, display_name, invite_token,
                                 drive_account_id, expires_at,
-                                drive_account_pinned, idempotency_key)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                                drive_account_pinned, idempotency_key,
+                                stream_token)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING {USER_COLUMNS}
             """,
             (email, display_name, invite_token, drive_account_id, expires_at,
-             pinned and drive_account_id is not None, idempotency_key),
+             pinned and drive_account_id is not None, idempotency_key,
+             new_stream_token()),
         ).fetchone()
 
 
@@ -438,6 +458,32 @@ def get_user(user_id: str) -> dict | None:
         return conn.execute(
             "SELECT * FROM users WHERE id = %s", (user_id,)
         ).fetchone()
+
+
+def get_user_by_stream_token(token: str) -> dict | None:
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM users WHERE stream_token = %s", (token,)
+        ).fetchone()
+
+
+def new_stream_token() -> str:
+    """Aleatorio e opaco. Nao deriva do id, senao trocar nao trocaria nada."""
+    return secrets.token_urlsafe(24)
+
+
+def rotate_stream_token(user_id: str) -> str | None:
+    """Da a conta um endereco novo e invalida o anterior no mesmo instante.
+
+    Devolve o token novo, ou None se a conta nao existe.
+    """
+    token = new_stream_token()
+    with get_conn() as conn:
+        linha = conn.execute(
+            "UPDATE users SET stream_token = %s WHERE id = %s RETURNING stream_token",
+            (token, user_id),
+        ).fetchone()
+    return linha["stream_token"] if linha else None
 
 
 def get_user_by_invite_token(token: str) -> dict | None:

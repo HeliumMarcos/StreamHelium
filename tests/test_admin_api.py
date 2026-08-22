@@ -931,3 +931,51 @@ def test_the_window_is_bounded(client, monkeypatch):
 
 def test_events_need_the_service_token(client):
     assert client.get("/api/admin/events").status_code == 401
+
+
+# --- token de stream rotacionável ---------------------------------------
+
+def test_rotating_gives_the_account_a_new_address(client, monkeypatch):
+    monkeypatch.setattr("sgd.db.get_user", lambda uid: user_row())
+    novos = []
+    monkeypatch.setattr("sgd.db.rotate_stream_token",
+                        lambda uid: novos.append(uid) or "token-novo-aleatorio")
+
+    resp = client.post(f"/api/admin/users/{UID}/stream-token", headers=auth())
+
+    assert resp.status_code == 200
+    assert novos == [UID]
+
+
+def test_rotating_an_unknown_account_is_a_404(client, monkeypatch):
+    monkeypatch.setattr("sgd.db.get_user", lambda uid: None)
+
+    resp = client.post(f"/api/admin/users/{UID}/stream-token", headers=auth())
+
+    assert resp.status_code == 404
+
+
+def test_rotating_needs_the_service_token(client):
+    assert client.post(f"/api/admin/users/{UID}/stream-token").status_code == 401
+
+
+def test_the_catalogue_receives_the_stream_token(client, monkeypatch):
+    """Sem ele o Catálogo não teria como montar o redirecionamento.
+
+    Não é segredo do espectador — o aparelho dele vê esse endereço no 302.
+    O que ele dá é a possibilidade de revogar.
+    """
+    monkeypatch.setattr("sgd.db.get_user", lambda uid: user_row(stream_token="abc123"))
+
+    resp = client.get(f"/api/admin/users/{UID}", headers=auth())
+
+    assert resp.get_json()["user"]["stream_token"] == "abc123"
+
+
+def test_the_password_still_never_leaves(client, monkeypatch):
+    monkeypatch.setattr("sgd.db.get_user",
+                        lambda uid: user_row(stream_token="abc", password_hash="segredo"))
+
+    corpo = client.get(f"/api/admin/users/{UID}", headers=auth()).get_data(as_text=True)
+
+    assert "segredo" not in corpo

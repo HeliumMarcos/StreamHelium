@@ -177,7 +177,12 @@ def _row(row: dict, drop=(), rename=None) -> dict:
 def _user_json(row: dict) -> dict:
     """`invite_token` is included: the Catálogo needs it to show the invite
     link. Credentials are not - password_hash never leaves this app, and
-    the row already exposes only whether one exists."""
+    the row already exposes only whether one exists.
+
+    `stream_token` tambem vai: e com ele que o Catalogo monta o
+    redirecionamento de play. Nao e segredo do espectador - o proprio
+    aparelho dele ve esse endereco no 302 -, o que ele da e a possibilidade
+    de REVOGAR, porque rotacionar mata o anterior na hora."""
     data = _row(row, drop=(
         "password_hash", "google_refresh_token", "tmdb_api_key",
         # Cru demais para o painel: o estado consolidado vai em `device`.
@@ -327,6 +332,24 @@ def api_reassign_user(uid):
 def api_reset_password(uid):
     user = actions.reset_password(uid)
     return _ok({"user": _user_json(user)})
+
+
+@endpoint("/users/<uid>/stream-token", methods=["POST"])
+def api_rotate_stream_token(uid):
+    """Da a conta um endereco novo de addon e mata o anterior.
+
+    Existe porque o `id` da conta e imutavel: enquanto ele valia como
+    endereco, "rotacionar link" no Catalogo trocava so a porta da frente.
+    Quem tivesse visto o 302 uma vez continuava assistindo.
+    """
+    if not db.get_user(uid):
+        return _error("Usuário não encontrado.", 404)
+
+    token = db.rotate_stream_token(uid)
+    if not token:
+        return _error("Não foi possível trocar o endereço.", 500)
+
+    return _ok({"user": _user_json(db.get_user(uid))})
 
 
 @endpoint("/users/<uid>/device", methods=["DELETE"])
