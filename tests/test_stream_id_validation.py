@@ -119,3 +119,37 @@ def test_a_complete_series_id_still_parses():
 def test_a_malformed_suffix_is_ignored_rather_than_trusted():
     # Melhor não buscar do que buscar por "int('x')".
     assert _parse_series_id("tt0903747:temporada:8") == (0, 0)
+
+
+# --- convite para pedir --------------------------------------------------
+
+def test_a_title_with_no_file_offers_a_way_to_ask_for_it(monkeypatch):
+    """Uma lista vazia deixa a pessoa sem saída.
+
+    O Stremio só mostra "nenhum stream" e o assunto morre ali. Um item
+    único, que leva ao pedido, transforma o beco sem saída numa ação — e
+    avisa o administrador do que falta, que é a informação mais difícil de
+    obter de outro jeito.
+    """
+    monkeypatch.setenv("CATALOG_API_URL", "https://catalogo.exemplo")
+
+    from sgd.routes import _convite_para_pedir
+
+    item = _convite_para_pedir("Duna Parte Dois")
+
+    # externalUrl e não url: o Stremio abre no navegador em vez de tentar
+    # tocar.
+    assert "externalUrl" in item
+    assert "url" not in item
+    assert item["externalUrl"].startswith("https://catalogo.exemplo/minha-conta?pedir=")
+    assert "Duna%20Parte%20Dois" in item["externalUrl"]
+
+
+def test_the_invitation_survives_a_title_with_odd_characters():
+    from sgd.routes import _convite_para_pedir
+
+    item = _convite_para_pedir("Amélie & Cia / 2001")
+
+    # Um título mal escapado quebraria o link em silêncio.
+    assert " " not in item["externalUrl"]
+    assert "&" not in item["externalUrl"].split("?", 1)[1].replace("pedir=", "")
