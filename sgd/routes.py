@@ -1,4 +1,5 @@
 import os
+from urllib.parse import quote
 import re
 import hashlib
 import logging
@@ -327,6 +328,25 @@ def addon_stream(user_id, stream_type, stream_id):
         abort(404)
 
 
+def _convite_para_pedir(titulo):
+    """O item que aparece quando nao ha arquivo para o titulo.
+
+    `externalUrl` porque o Stremio abre no navegador em vez de tentar
+    tocar - e o que se quer aqui e levar a pessoa ao formulario, ja com o
+    nome preenchido.
+    """
+    base = (os.environ.get("CATALOG_API_URL") or "https://catalogo.heliummarcos.com.br").rstrip("/")
+
+    return {
+        "name": "➕ Pedir",
+        "title": (
+            "Nao tenho este titulo ainda.\n"
+            "Toque para pedir que eu adicione."
+        ),
+        "externalUrl": f"{base}/minha-conta?pedir={quote(str(titulo))}",
+    }
+
+
 def _anotar_evento(kind, detail=""):
     """Registra um problema de operacao sem nunca atrapalhar a reproducao."""
     try:
@@ -396,5 +416,16 @@ def get_streams(gdrive, stream_type, stream_id, viewer_id=None, session_id=None)
         # muitos seguidos costumam significar Drive fora do ar, autorizacao
         # revogada ou arquivo nomeado fora do padrao.
         _anotar_evento("sem_resultado", stream_id)
+
+        # Uma lista vazia deixa a pessoa sem saber o que fazer: o Stremio
+        # so mostra "nenhum stream" e o assunto morre ali. Um item unico,
+        # que leva ao pedido, transforma o beco sem saida numa acao - e
+        # avisa voce do que falta no acervo, que e a informacao mais dificil
+        # de obter de outro jeito.
+        nome = (getattr(stream_meta, "name", None)
+                or (stream_meta.titles[0] if getattr(stream_meta, "titles", None) else None)
+                or stream_id)
+        yield f"{dumps([_convite_para_pedir(nome)])}}}"
+        return
 
     yield f"{dumps(streams.results)}}}"
