@@ -35,6 +35,19 @@ logger = logging.getLogger(__name__)
 # make the viewer wait twice.
 TIMEOUT_SECONDS = float(os.environ.get("CATALOG_API_TIMEOUT", "2.5"))
 
+# O mod_security da HostGator devolve 406 para o User-Agent padrao do
+# `requests` ("python-requests/2.32.3"). Sem isto, TODA consulta ao
+# Catalogo era recusada antes de chegar ao Laravel, e o addon caia
+# silenciosamente para TMDB e Cinemeta - perdendo exatamente os titulos
+# curados que casam com o nome dos arquivos no Drive.
+#
+# O sintoma nao parecia um bloqueio: aparecia como filme sem nenhuma opcao
+# de stream, so nos titulos cujo arquivo foi nomeado pelo nome curado.
+#
+# Qualquer identificacao sem "python-requests" passa. Esta diz quem somos,
+# que e o que um User-Agent deveria fazer.
+USER_AGENT = "StreamHelium/1.0 (+https://stream-helium.vercel.app)"
+
 
 def _base_url() -> str | None:
     url = os.environ.get("CATALOG_API_URL", "https://catalogo.heliummarcos.com.br")
@@ -84,7 +97,11 @@ def lookup(imdb_id: str) -> dict | None:
     try:
         response = requests.get(
             f"{base}/api/interno/titulos/{imdb_id}",
-            headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+            headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "User-Agent": USER_AGENT,
+        },
             timeout=TIMEOUT_SECONDS,
         )
     except Exception as e:
