@@ -93,11 +93,42 @@ def load_user_landing(user_id):
     return user_row
 
 
+def _resolver(identificador):
+    """Encontra a conta pelo token de stream ou, para contas antigas, pelo id.
+
+    O token e o identificador novo do addon: aleatorio e trocavel. O id da
+    conta e imutavel, entao enquanto ele valesse como endereco, trocar o
+    link nao revogava nada — quem tivesse visto o 302 uma vez assistiria
+    para sempre.
+
+    A migracao e por conta e automatica:
+
+      - conta COM token: so o token abre. O id passa a dar 404, e e isso
+        que faz a rotacao valer alguma coisa.
+      - conta SEM token: o id ainda abre. Contas antigas continuam
+        funcionando ate alguem rotacionar o link delas.
+
+    Sem esse segundo caso, publicar isto derrubaria todo mundo antes de o
+    Catalogo conhecer os tokens novos.
+    """
+    por_token = db.get_user_by_stream_token(identificador)
+    if por_token:
+        return por_token
+
+    por_id = db.get_user(identificador)
+    if por_id and por_id.get("stream_token"):
+        # Ja migrou: o endereco antigo morreu junto com a rotacao.
+        logger.info("Refused the old address for a rotated account.")
+        return None
+
+    return por_id
+
+
 def load_tenant(user_id):
     """Called at the top of every /u/<user_id>/... route. Aborts the
     request (404) for unknown/inactive/expired/unassigned users rather than
     leaking which of those is the case."""
-    user_row = db.get_user(user_id)
+    user_row = _resolver(user_id)
     if not user_row or not db.is_effectively_active(user_row):
         abort(404)
 
