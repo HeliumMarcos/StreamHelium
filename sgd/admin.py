@@ -6,7 +6,8 @@ Three pools to manage, all admin-only:
 - tmdb_keys: TMDB API keys, used round-robin to spread rate-limit load.
 - users: family/viewer accounts, each auto-assigned to whichever pool
   account currently has the fewest people, optionally with an expiration
-  date and a one-device-at-a-time limit.
+  date. O aparelho em uso e registrado para o painel mostrar, mas nao
+  limita nada: o limite de um por vez foi removido.
 
 Auth: a single shared password in the ADMIN_PASSWORD env var. Intentionally
 simple - this is for one admin (you), not a multi-admin system.

@@ -543,26 +543,24 @@ def has_active_tmdb_key() -> bool:
 # --- device_sessions (one active device per family account) ---------------
 
 def touch_device_session(
-    user_id: str, fingerprint: str, device_label: str, ttl_minutes: int
+    user_id: str, fingerprint: str, device_label: str, ttl_minutes: int = 0
 ) -> bool:
-    """Registers this request's device as the active one for this family
-    account, UNLESS a different device is already active and within its TTL
-    - in which case this call is rejected (returns False) and nothing is
-    written. The device fingerprint is a best-effort signature (see
-    routes.py) - there's no real device ID available from Stremio's HTTP
-    API, so this is approximate, not cryptographically exact."""
-    with get_conn() as conn:
-        row = conn.execute(
-            "SELECT fingerprint, last_seen FROM device_sessions "
-            "WHERE user_id = %s FOR UPDATE",
-            (user_id,),
-        ).fetchone()
-        now = datetime.now(timezone.utc)
+    """Anota qual aparelho esta conta esta usando agora.
 
-        if row and row["fingerprint"] != fingerprint:
-            age_minutes = (now - row["last_seen"]).total_seconds() / 60
-            if age_minutes < ttl_minutes:
-                return False
+    Ja recusou: um aparelho diferente dentro do TTL levava False, e o
+    add-on devolvia um aviso no lugar dos streams. Nao recusa mais - o
+    limite de um aparelho por vez saiu inteiro, porque prendia a propria
+    pessoa. A impressao digital e aproximada (o Stremio nao expoe id de
+    aparelho), entao trocar de rede ou atualizar o app ja bastava para
+    parecer outro aparelho e travar ate o TTL vencer.
+
+    O registro continua: e dele que sai "aparelho conectado" na pagina da
+    conta e no painel. `ttl_minutes` sobrou por compatibilidade de
+    assinatura; nada mais le esse valor.
+
+    Devolve sempre True."""
+    with get_conn() as conn:
+        now = datetime.now(timezone.utc)
 
         conn.execute(
             """
@@ -593,31 +591,19 @@ def clear_device_session(user_id: str) -> None:
 def claim_playback_session(user_id: str, session_id: str, idle_seconds: int) -> bool:
     """Called by the Worker while a viewer is actually streaming bytes.
 
-    Grants the slot to `session_id` and refreshes it, unless a *different*
-    session is holding it and was seen within `idle_seconds`. Returns False
-    in that case and writes nothing.
+    Ja recusou, e era esse o problema relatado: um `session_id` novo nasce
+    a CADA listagem de streams, mas a vaga so era liberada apos
+    `idle_seconds` de silencio. A pessoa competia consigo mesma - abrir o
+    proximo episodio, ou o player reabrir a lista no meio do filme, criava
+    uma sessao que a anterior bloqueava por tres minutos. O Worker
+    traduzia o 409 em 403 e o player travava.
 
-    Because the Worker calls this repeatedly while a video plays, an
-    abandoned session frees itself: stop watching, stop refreshing, and
-    after `idle_seconds` the next device takes over. That is the whole
-    reason this can use a short timeout where device_sessions needs hours -
-    its signal arrives continuously instead of once per stream listing.
+    Agora sempre concede e so atualiza o carimbo. O que sobra e presenca:
+    quem esta assistindo e desde quando, que e o que o painel mostra.
 
-    The flip side is a long pause: a player with a full buffer stops
-    requesting bytes, so pausing for longer than `idle_seconds` can let
-    another device take the slot."""
+    `idle_seconds` sobrou por compatibilidade; nada mais le esse valor."""
     with get_conn() as conn:
-        row = conn.execute(
-            "SELECT session_id, last_seen FROM playback_sessions "
-            "WHERE user_id = %s FOR UPDATE",
-            (user_id,),
-        ).fetchone()
         now = datetime.now(timezone.utc)
-
-        if row and row["session_id"] != session_id:
-            idle = (now - row["last_seen"]).total_seconds()
-            if idle < idle_seconds:
-                return False
 
         conn.execute(
             """

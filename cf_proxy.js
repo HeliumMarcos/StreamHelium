@@ -115,9 +115,9 @@ async function handleRequest(request, env) {
 // A playback URL carries ?u=<viewer>&n=<session>&e=<expiry>&s=<signature>,
 // signed by the addon (see sgd/signing.py). Two things follow from it:
 // the URL stops being an eternal public link to the file, and the Worker
-// finally knows which viewer the bytes are for - which is what makes a
-// real one-device-at-a-time limit possible, since the addon can be asked
-// whether this session still holds that viewer's slot.
+// knows which viewer the bytes are for - o que hoje serve para o painel
+// mostrar quem esta assistindo. Ja sustentou um limite de um aparelho por
+// vez; ele foi removido por barrar a propria pessoa.
 async function authorizeAndStream(env, request, url, accountId, fileId) {
   const viewer = url.searchParams.get("u")
   const session = url.searchParams.get("n")
@@ -143,10 +143,14 @@ async function authorizeAndStream(env, request, url, accountId, fileId) {
     return new Response("403 Invalid or expired playback URL", { status: 403 })
   }
 
-  const slot = await claimPlaybackSlot(env, viewer, session)
-  if (slot === "taken") {
-    return new Response("403 Already playing on another device", { status: 403 })
-  }
+  // Avisa que esta reproducao esta viva, mas nao espera permissao: o
+  // limite de um aparelho por vez saiu. Ele barrava a propria pessoa,
+  // porque um id de sessao novo nasce a cada listagem de streams e a vaga
+  // ficava presa por tres minutos - abrir o proximo episodio bastava.
+  //
+  // O addon ja concede sempre, entao este Worker nao precisa ser
+  // republicado para o bloqueio sumir. Isto aqui so tira o caminho morto.
+  await touchPlaybackSession(env, viewer, session)
 
   return streamFile(env, request, accountId, fileId)
 }
@@ -190,15 +194,18 @@ function timingSafeEqual(a, b) {
   return diff === 0
 }
 
-// Verdicts are cached per viewer+session so a two-hour film doesn't turn
-// into thousands of calls to the addon - a player issues a fresh range
-// request for every seek and every buffer top-up. The cache window has to
-// stay well under PLAYBACK_IDLE_SECONDS on the addon side, or a viewer
-// would let their own slot go stale and evict themselves.
+// O aviso e cacheado por viewer+session para um filme de duas horas nao
+// virar milhares de chamadas ao addon - o player abre uma requisicao de
+// faixa a cada busca e a cada recarga de buffer. O cache vale por isolate,
+// e a Cloudflare espalha requisicoes por varios, entao a economia real e
+// menor que a janela sugere.
 const slotCache = new Map()
 const SLOT_CACHE_MS = 45_000
 
-async function claimPlaybackSlot(env, viewer, session) {
+// Nao pede permissao: so avisa que a reproducao segue viva, para o painel
+// mostrar quem esta assistindo. O retorno existe por simetria com o
+// codigo antigo e nunca e usado para barrar nada.
+async function touchPlaybackSession(env, viewer, session) {
   if (!env.TOKEN_ENDPOINT || !env.TOKEN_ENDPOINT_SECRET) return "granted"
 
   const key = `${viewer}|${session}`
@@ -219,20 +226,12 @@ async function claimPlaybackSlot(env, viewer, session) {
   } catch (e) {
     // Fail open, like the addon does on a database error. The limit is a
     // convenience; it isn't worth taking the household's video down for.
-    console.error(`Playback slot check unreachable (${e.message}) - allowing`)
+    console.error(`Playback ping unreachable (${e.message}) - continuing`)
     return "granted"
   }
 
-  if (resp.status === 409) {
-    // Don't cache a denial for as long as a grant: the other device may
-    // stop at any moment, and a viewer retrying shouldn't wait out a stale
-    // no.
-    slotCache.set(key, { verdict: "taken", until: Date.now() + 5_000 })
-    return "taken"
-  }
-
   if (!resp.ok) {
-    console.error(`Playback slot check returned ${resp.status} - allowing`)
+    console.error(`Playback ping returned ${resp.status} - continuing`)
     return "granted"
   }
 

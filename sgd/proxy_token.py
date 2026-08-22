@@ -45,11 +45,10 @@ VALID_ACCOUNT_ID = re.compile(
 # re-fetching on every request.
 MIN_LIFETIME_SECONDS = 60
 
-# How long a playback session may go without the Worker checking in before
-# another device is allowed to take the slot. Has to be comfortably longer
-# than the Worker's own check-in interval, or a viewer would evict
-# themselves. Also absorbs pauses: a paused player stops requesting bytes,
-# so this is how long you can pause before someone else can take over.
+# Nao controla mais acesso a nada - ninguem e barrado. Sobrou como o
+# intervalo que o Worker recebe em `renew_after`, ou seja, de quanto em
+# quanto tempo ele reavisa que a reproducao continua viva. E esse aviso
+# que mantem "assistindo agora" atualizado no painel.
 PLAYBACK_IDLE_SECONDS = int(os.environ.get("PLAYBACK_IDLE_SECONDS", "180"))
 
 
@@ -120,15 +119,18 @@ def drive_token(account_id):
 # during playback.
 @app.route("/internal/playback/<viewer_id>", methods=["POST"])
 def playback_claim(viewer_id):
-    """Called by the Worker while a viewer streams, to keep or acquire that
-    viewer's single playback slot.
+    """Chamado pelo Worker enquanto alguem assiste.
 
-    POST so it's plainly a mutation - it refreshes the slot's timestamp on
-    every successful call, which is what lets an abandoned session expire
-    on its own.
+    Ja foi a trava de um aparelho por vez, e devolvia 409 quando outra
+    sessao estava com a vaga. O Worker traduzia isso em 403 e o player
+    travava - inclusive quando a "outra sessao" era a propria pessoa
+    abrindo o proximo episodio, porque um id de sessao novo nasce a cada
+    listagem de streams.
 
-    409 means somebody else is watching. The Worker turns that into a 403
-    for the player."""
+    Agora sempre concede. O endpoint continua existindo por dois motivos:
+    o Worker publicado segue chamando (nao precisa ser republicado para o
+    bloqueio sumir), e o carimbo que ele atualiza e o que alimenta
+    "assistindo agora" no painel."""
     authorized = _is_authorized(request)
     if authorized is None:
         return jsonify({"error": "proxy_token_endpoint_disabled"}), 503
@@ -143,16 +145,9 @@ def playback_claim(viewer_id):
         return jsonify({"error": "missing_session"}), 400
 
     try:
-        granted = db.claim_playback_session(
-            viewer_id, session_id, PLAYBACK_IDLE_SECONDS
-        )
+        db.claim_playback_session(viewer_id, session_id, PLAYBACK_IDLE_SECONDS)
     except Exception as e:
-        # Fail open, same as the stream-listing device check: a database
-        # hiccup shouldn't stop the household from watching anything.
-        logger.warning("Playback claim failed, allowing playback: %s", e)
+        logger.warning("Playback record failed, allowing playback: %s", e)
         return jsonify({"granted": True, "degraded": True})
-
-    if not granted:
-        return jsonify({"granted": False}), 409
 
     return jsonify({"granted": True, "renew_after": PLAYBACK_IDLE_SECONDS // 3})

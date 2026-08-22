@@ -8,7 +8,6 @@ from sgd.meta import MetadataNotFound, Meta
 from sgd import signing
 from sgd.streams import Streams
 from sgd.utils import split_stream_id, hr_size
-from sgd.branding import admin_whatsapp_link
 from json import dumps
 from flask import g, jsonify, abort, Response, redirect, request
 from datetime import datetime
@@ -107,7 +106,8 @@ def _device_fingerprint(req):
     return hashlib.sha256(f"{ua}|{ip}".encode()).hexdigest()[:16]
 
 
-def _check_device_limit(user_id, req):
+def _record_device(user_id, req):
+    """Anota o aparelho para o painel. Nunca bloqueia."""
     fingerprint = _device_fingerprint(req)
     device_label = (req.headers.get("User-Agent") or "dispositivo desconhecido")[:120]
     try:
@@ -115,9 +115,9 @@ def _check_device_limit(user_id, req):
             user_id, fingerprint, device_label, DEVICE_SESSION_TTL_MINUTES
         )
     except Exception as e:
-        # Fail open: a DB hiccup on the device check shouldn't take down
-        # playback for everyone.
-        logger.warning("Device session check failed, allowing request: %s", e)
+        # Anotar quem esta assistindo nunca vale interromper quem esta
+        # assistindo.
+        logger.warning("Device session record failed, continuing: %s", e)
         return True
 
 
@@ -295,39 +295,19 @@ def addon_stream(user_id, stream_type, stream_id):
     if invalid_stream_type or invalid_id:
         abort(404)
 
-    # Two different one-device-at-a-time mechanisms, and only one of them
-    # can work at a time.
+    # Nao ha mais limite de um aparelho por vez. Existiram dois
+    # mecanismos, e os dois puniam a propria pessoa:
     #
-    # Through the proxy, the Worker enforces the limit against actual
-    # playback (see sgd/proxy_token.py), using a session id issued right
-    # here. That is strictly better: it watches bytes rather than menu
-    # opens, and its identity is one we minted instead of a User-Agent and
-    # an IP - which broke every time an app updated or a phone changed
-    # network. So don't also block here; just keep recording the device
-    # label for the admin page.
+    #  - impressao digital do aparelho: aproximada demais. Trocar de rede
+    #    ou atualizar o app ja parecia outro aparelho, e travava por horas.
+    #  - vaga de reproducao: um id de sessao novo a cada listagem, com a
+    #    vaga presa por tres minutos. Abrir o proximo episodio bloqueava
+    #    a si mesmo.
     #
-    # Without the proxy there is no Worker in the path and nothing else to
-    # enforce anything, so the old fingerprint check still applies.
+    # O registro do aparelho fica, porque a pagina da conta e o painel
+    # mostram quem esta assistindo. So a recusa saiu.
     session_id = signing.new_session_id()
-    proxied = bool(os.environ.get("CF_PROXY_URL")) and _proxy_actually_enabled()
-
-    if proxied:
-        _check_device_limit(user_id, request)
-    elif not _check_device_limit(user_id, request):
-        logger.info("Blocked stream request for user %s - device limit reached", user_id)
-        resp = jsonify({
-            "streams": [{
-                "name": "⚠️ Stream Helium",
-                "title": (
-                    "Outro dispositivo está usando esta conta. Aguarde até 4 horas "
-                    "sem reprodução ou peça ao administrador para liberar o acesso."
-                ),
-                "externalUrl": admin_whatsapp_link(
-                    "Olá! Preciso liberar o dispositivo da minha conta no Stream Helium."
-                ),
-            }]
-        })
-        return common_headers(resp)
+    _record_device(user_id, request)
 
     # Antes de buscar: se a busca falhar, a pessoa ainda abriu o titulo, e
     # e isso que o catalogo de "voce ainda nao viu" precisa saber.
