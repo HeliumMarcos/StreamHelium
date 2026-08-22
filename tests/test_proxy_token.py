@@ -122,16 +122,27 @@ def test_playback_claim_grants_and_reports_renewal(client, monkeypatch):
     assert resp.get_json()["renew_after"] > 0
 
 
-def test_playback_claim_is_409_when_another_session_holds_the_slot(client, monkeypatch):
+def test_another_session_is_never_refused(client, monkeypatch):
+    """A vaga de reproducao deixou de bloquear.
+
+    Um `session_id` novo nasce a cada listagem de streams, mas a vaga so
+    era liberada apos tres minutos de silencio - entao abrir o proximo
+    episodio, ou o player reabrir a lista no meio do filme, fazia a pessoa
+    competir consigo mesma. Vinha 409, o Worker traduzia em 403 e o player
+    travava.
+    """
     monkeypatch.setenv("PROXY_SHARED_SECRET", "shared-secret")
-    monkeypatch.setattr("sgd.db.claim_playback_session", lambda *a: False)
+    # Mesmo que a camada de banco volte a recusar, o endpoint nao pode
+    # transformar isso num 409: e o 409 que o Worker traduz em 403, e e o
+    # 403 que trava o player.
+    monkeypatch.setattr("sgd.db.claim_playback_session", lambda *a, **k: False)
 
     resp = client.post(
         f"/internal/playback/{ACCOUNT}", headers=_auth(), json={"session": "sess-2"}
     )
 
-    assert resp.status_code == 409
-    assert resp.get_json()["granted"] is False
+    assert resp.status_code == 200
+    assert resp.get_json()["granted"] is True
 
 
 def test_playback_claim_needs_a_session(client, monkeypatch):

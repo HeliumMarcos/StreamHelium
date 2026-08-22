@@ -332,12 +332,14 @@ def reset_password(uid: str) -> dict:
 
 
 def free_device(uid: str) -> dict:
-    """Clears both locks.
+    """Esquece o aparelho e a reproducao registrados.
 
-    Through the proxy the playback slot is the one that actually blocks
-    anything, and it normally frees itself within PLAYBACK_IDLE_SECONDS -
-    but if this is being called, something is stuck, and leaving half the
-    state behind would look like the button did nothing.
+    Ja destravou acesso: eram duas travas, e este botao era a saida quando
+    alguem ficava preso. Nao ha mais trava nenhuma - ninguem e barrado por
+    estar em outro aparelho.
+
+    O botao continua util para uma coisa so: zerar o que o painel mostra,
+    quando "assistindo agora" fica pendurado numa sessao que ja acabou.
     """
     user_row = _require_user(uid)
     db.clear_device_session(uid)

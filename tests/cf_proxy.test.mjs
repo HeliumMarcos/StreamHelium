@@ -324,7 +324,10 @@ test("an unsigned URL plays until REQUIRE_SIGNED_URLS is turned on", async () =>
   )
 })
 
-test("playback is refused while another session holds the viewer's slot", async () => {
+test("a 409 from the addon no longer stops playback", async () => {
+  // O limite de um aparelho por vez saiu. Mesmo um addon antigo,
+  // ainda respondendo 409, nao pode travar o player: era esse 409 que
+  // virava 403 e fazia o filme parar no meio.
   const calls = stubFetch((url, init) =>
     url.includes("/internal/playback/")
       ? new Response(JSON.stringify({ granted: false }), { status: 409 })
@@ -334,8 +337,7 @@ test("playback is refused while another session holds the viewer's slot", async 
 
   const resp = await worker.fetch(new Request(await signedUrl({ viewer })), SIGNED_ENV)
 
-  assert.equal(resp.status, 403)
-  assert.match(await resp.text(), /another device/)
+  assert.equal(resp.status, 200)
   const claim = calls.find((c) => c.url.includes("/internal/playback/"))
   assert.equal(claim.method, "POST")
   assert.ok(claim.url.endsWith(`/playback/${viewer}`))

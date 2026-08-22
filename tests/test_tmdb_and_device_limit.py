@@ -185,17 +185,37 @@ def _patch_tenant(monkeypatch, gdrive=None):
     monkeypatch.setattr("sgd.tenancy.load_tenant", fake_load_tenant)
 
 
-def test_stream_blocked_when_device_limit_reached(client, monkeypatch):
-    _patch_tenant(monkeypatch)
+def test_another_device_no_longer_blocks_the_listing(client, monkeypatch):
+    """O limite de um aparelho por vez saiu.
+
+    Mesmo que o registro do aparelho recuse (o que nao acontece mais, mas
+    um banco antigo poderia), a listagem tem que sair normal. Antes daqui
+    voltava um unico "stream" de aviso, e quem estava assistindo via o
+    filme virar uma mensagem.
+    """
+    _patch_tenant(monkeypatch, gdrive=object())
     monkeypatch.setattr("sgd.db.touch_device_session", lambda *a, **k: False)
+    monkeypatch.setattr("sgd.routes.get_streams", lambda gdrive, t, sid, **kw: iter(['{"streams":[]}']))
 
     resp = client.get(f"/u/{TEST_USER_ID}/stream/movie/tt0111161.json")
 
     assert resp.status_code == 200
-    body = resp.get_json()
-    assert len(body["streams"]) == 1
-    assert "Outro dispositivo" in body["streams"][0]["title"]
-    assert body["streams"][0]["externalUrl"].startswith("https://wa.me/")
+    assert resp.get_json() == {"streams": []}
+
+
+def test_the_device_is_still_recorded(client, monkeypatch):
+    """Sem o bloqueio, o registro continua - e dele que sai "aparelho
+    conectado" na pagina da conta e no painel."""
+    _patch_tenant(monkeypatch, gdrive=object())
+    monkeypatch.setattr("sgd.routes.get_streams", lambda gdrive, t, sid, **kw: iter(['{"streams":[]}']))
+
+    vistos = []
+    monkeypatch.setattr("sgd.db.touch_device_session", lambda *a, **k: vistos.append(a) or True)
+
+    client.get(f"/u/{TEST_USER_ID}/stream/movie/tt0111161.json")
+
+    assert len(vistos) == 1
+    assert vistos[0][0] == TEST_USER_ID
 
 
 def test_stream_allowed_when_device_matches(client, monkeypatch):
