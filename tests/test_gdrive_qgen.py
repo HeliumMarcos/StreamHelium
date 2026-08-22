@@ -86,3 +86,47 @@ def test_search_queries_by_id_even_when_titles_dont_match_the_file():
     gd.search(sm)
 
     assert "name contains 'tt15047880'" in captured["query"]
+
+
+# --- série sem episódio -------------------------------------------------
+
+class _MetaSemEpisodio:
+    """O que chega quando o Stremio pede series/tt1234567 sem sufixo."""
+
+    stream_type = "series"
+    titles = ["Alguma Série"]
+    se = 0
+    ep = 0
+    id = "tt27497393"
+
+
+class _MetaComEpisodio:
+    stream_type = "series"
+    titles = ["Alguma Série"]
+    se = "04"
+    ep = "08"
+    id = "tt0903747"
+
+
+def test_a_series_without_an_episode_returns_nothing_instead_of_crashing():
+    """Era um ValueError no meio da resposta já iniciada.
+
+    `int(sm.ep)` recebia o próprio id IMDb, porque Meta atribuía `ep`
+    antes de `se` estourar IndexError. O cliente recebia JSON pela metade
+    e não mostrava opção nenhuma — sem erro visível em lugar algum.
+    """
+    from sgd.gdrive import GoogleDrive
+
+    drive = GoogleDrive.__new__(GoogleDrive)
+
+    assert drive.get_query(_MetaSemEpisodio()) == []
+
+
+def test_a_series_with_an_episode_still_builds_its_query():
+    from sgd.gdrive import GoogleDrive
+
+    drive = GoogleDrive.__new__(GoogleDrive)
+    consultas = drive.get_query(_MetaComEpisodio())
+
+    assert consultas, "com temporada e episódio a busca tem que sair"
+    assert "S04E08" in consultas[0]
