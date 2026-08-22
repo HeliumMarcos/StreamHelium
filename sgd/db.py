@@ -191,6 +191,34 @@ def init_schema():
             "CREATE INDEX IF NOT EXISTS idx_title_views_imdb ON title_views (imdb_id);"
         )
 
+        # Problemas de operacao, agregados por dia.
+        #
+        # Existe porque quatro defeitos seguidos passaram despercebidos ate
+        # alguem reclamar que "o filme nao abre": o firewall da hospedagem
+        # recusando toda consulta ao Catalogo, um crash em serie sem
+        # episodio, imagens 404 e tokens do Google revogados. Todos ja
+        # apareciam no log; ninguem le log de producao todo dia.
+        #
+        # Agregado e nao uma linha por ocorrencia: o 406 acontecia a CADA
+        # reproducao, e uma tabela linha-a-linha viraria enxurrada. Aqui o
+        # mesmo problema no mesmo dia soma no contador.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ops_events (
+                kind TEXT NOT NULL,
+                detail TEXT NOT NULL DEFAULT '',
+                day DATE NOT NULL DEFAULT CURRENT_DATE,
+                count INTEGER NOT NULL DEFAULT 1,
+                first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+                last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+                PRIMARY KEY (kind, detail, day)
+            );
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ops_events_day ON ops_events (day DESC);"
+        )
+
 
 def _is_expired(user_row: dict) -> bool:
     expires_at = user_row.get("expires_at")
@@ -771,3 +799,52 @@ def get_admin_overview() -> dict:
         ).fetchone()
 
     return {"family": family, "drives": drives, "tmdb": tmdb, "devices": devices}
+
+
+# --- eventos de operacao -------------------------------------------------
+
+def record_event(kind: str, detail: str = "") -> None:
+    """Anota um problema operacional. Nunca levanta.
+
+    Registrar que algo deu errado nao pode ser mais uma coisa dando errado
+    - especialmente porque os pontos que chamam isto ja estao no meio de
+    um caminho degradado.
+    """
+    try:
+        with get_conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO ops_events (kind, detail)
+                VALUES (%s, %s)
+                ON CONFLICT (kind, detail, day) DO UPDATE
+                    SET count = ops_events.count + 1,
+                        last_seen = now()
+                """,
+                (kind[:60], (detail or "")[:200]),
+            )
+    except Exception as e:
+        logger.warning("Could not record ops event %s: %s", kind, e)
+
+
+def recent_events(days: int = 7, limit: int = 50) -> list[dict]:
+    """Problemas dos ultimos dias, do mais recente para o mais antigo."""
+    with get_conn() as conn:
+        return conn.execute(
+            """
+            SELECT kind, detail, day, count, first_seen, last_seen
+            FROM ops_events
+            WHERE day >= CURRENT_DATE - %s::int
+            ORDER BY last_seen DESC
+            LIMIT %s
+            """,
+            (days, limit),
+        ).fetchall()
+
+
+def forget_events_older_than(days: int = 60) -> None:
+    """Retencao. Sem isto a tabela so cresce."""
+    try:
+        with get_conn() as conn:
+            conn.execute("DELETE FROM ops_events WHERE day < CURRENT_DATE - %s::int", (days,))
+    except Exception as e:
+        logger.warning("Could not prune ops events: %s", e)

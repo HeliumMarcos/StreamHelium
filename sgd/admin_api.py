@@ -477,6 +477,30 @@ def api_titles_seen(uid):
 
 # --- settings -----------------------------------------------------------
 
+@endpoint("/events")
+def api_events():
+    """Problemas de operacao dos ultimos dias, agregados.
+
+    Existe porque quatro defeitos seguidos so foram descobertos quando
+    alguem reclamou que o filme nao abria. Todos ja estavam no log; log de
+    producao ninguem le todo dia. Aqui eles chegam ao painel.
+    """
+    try:
+        dias = max(1, min(int(request.args.get("days", 7)), 60))
+    except (TypeError, ValueError):
+        dias = 7
+
+    try:
+        linhas = db.recent_events(dias)
+    except Exception as e:
+        # Nao ter o historico nao pode derrubar a tela que existe para
+        # mostrar o que esta quebrado.
+        logger.warning("Could not read ops events: %s", e)
+        return _ok({"events": [], "degraded": True})
+
+    return _ok({"events": [_row(dict(linha)) for linha in linhas]})
+
+
 @endpoint("/settings")
 def api_get_settings():
     return _ok({

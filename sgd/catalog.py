@@ -81,6 +81,20 @@ def _token() -> str | None:
     return antigo
 
 
+def _anotar(kind: str, detail: str = "") -> None:
+    """Registra o problema sem nunca atrapalhar a reproducao.
+
+    Import tardio de proposito: catalog.py e chamado no caminho de play, e
+    nao deve depender do banco para funcionar.
+    """
+    try:
+        from sgd import db
+
+        db.record_event(kind, detail)
+    except Exception:
+        pass
+
+
 def lookup(imdb_id: str) -> dict | None:
     """Curated metadata for an IMDb id, or None to use the old path.
 
@@ -98,14 +112,15 @@ def lookup(imdb_id: str) -> dict | None:
         response = requests.get(
             f"{base}/api/interno/titulos/{imdb_id}",
             headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json",
-            "User-Agent": USER_AGENT,
-        },
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/json",
+                "User-Agent": USER_AGENT,
+            },
             timeout=TIMEOUT_SECONDS,
         )
     except Exception as e:
         logger.info("Catalogue lookup for %s failed, using the usual sources: %s", imdb_id, e)
+        _anotar("catalogo_inacessivel", type(e).__name__)
         return None
 
     if response.status_code == 404:
@@ -117,6 +132,10 @@ def lookup(imdb_id: str) -> dict | None:
             "Catalogue answered %s for %s; using the usual sources.",
             response.status_code, imdb_id,
         )
+        # Este e o registro que teria denunciado no primeiro dia o 406 do
+        # firewall da hospedagem, em vez de ele virar "filme sem opcao"
+        # semanas depois.
+        _anotar("catalogo_recusou", f"HTTP {response.status_code}")
         return None
 
     try:
