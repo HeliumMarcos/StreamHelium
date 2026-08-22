@@ -96,6 +96,21 @@ def init_schema():
         conn.execute(
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT;"
         )
+        # Chave de idempotencia do cadastro. O Catalogo escreve em dois
+        # bancos que nenhuma transacao cobre: cria a conta aqui, define a
+        # senha, e so entao grava o vinculo no MySQL. Falhando no meio,
+        # sobrava usuario aqui sem vinculo la, e repetir dava e-mail
+        # duplicado - a pessoa ficava sem conta e sem saida.
+        #
+        # Com a chave, repetir devolve a MESMA conta em vez de erro, e a
+        # tentativa seguinte completa o que faltou.
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS idempotency_key TEXT;"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS users_idempotency_key_idx "
+            "ON users (idempotency_key) WHERE idempotency_key IS NOT NULL;"
+        )
 
         conn.execute(
             """
@@ -320,31 +335,51 @@ def pick_least_loaded_drive_account() -> dict | None:
 
 # --- users (family/viewer accounts) ---------------------------------------
 
+USER_COLUMNS = """id, email, display_name, active, invite_token,
+                  drive_account_id, drive_account_pinned, expires_at,
+                  created_at, connected_at,
+                  (tmdb_api_key IS NOT NULL) AS tmdb_connected"""
+
+
+def user_by_idempotency_key(key: str) -> dict | None:
+    """A conta ja criada por esta mesma tentativa de cadastro, se houver."""
+    with get_conn() as conn:
+        return conn.execute(
+            f"SELECT {USER_COLUMNS} FROM users WHERE idempotency_key = %s",
+            (key,),
+        ).fetchone()
+
+
 def create_user(
     email: str,
     display_name: str | None = None,
     drive_account_id: str | None = None,
     expires_in_days: int | None = None,
     pinned: bool = False,
+    idempotency_key: str | None = None,
 ) -> dict:
     invite_token = secrets.token_urlsafe(24)
     expires_at = (
         datetime.now(timezone.utc) + timedelta(days=expires_in_days)
         if expires_in_days else None
     )
+    if idempotency_key:
+        # Repetir a mesma tentativa devolve a mesma conta, nao um erro.
+        ja = user_by_idempotency_key(idempotency_key)
+        if ja:
+            return ja
+
     with get_conn() as conn:
         return conn.execute(
-            """
+            f"""
             INSERT INTO users (email, display_name, invite_token,
-                                drive_account_id, expires_at, drive_account_pinned)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            RETURNING id, email, display_name, active, invite_token,
-                      drive_account_id, drive_account_pinned, expires_at,
-                      created_at, connected_at,
-                      (tmdb_api_key IS NOT NULL) AS tmdb_connected
+                                drive_account_id, expires_at,
+                                drive_account_pinned, idempotency_key)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING {USER_COLUMNS}
             """,
             (email, display_name, invite_token, drive_account_id, expires_at,
-             pinned and drive_account_id is not None),
+             pinned and drive_account_id is not None, idempotency_key),
         ).fetchone()
 
 

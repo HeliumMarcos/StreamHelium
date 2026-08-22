@@ -42,10 +42,30 @@ def _base_url() -> str | None:
 
 
 def _token() -> str | None:
-    """The same shared secret the Catálogo uses to call this app, valid in
-    both directions. Two secrets between two systems that already trust
-    each other would add a variable to misconfigure, not isolation."""
-    return os.environ.get("ADMIN_API_TOKEN")
+    """O segredo com que ESTE app chama o Catalogo.
+
+    Ja foi o mesmo dos dois sentidos, defendido com o argumento de que os
+    dois sistemas ja confiam um no outro. O argumento estava errado: o que
+    difere nao e a confianca, e o raio de dano. Este token vive no .env de
+    uma hospedagem compartilhada e serve so para consultar titulos; o
+    ADMIN_API_TOKEN abre a API administrativa inteira. Com um valor so,
+    vazar o primeiro entregava o segundo.
+
+    Aceita o antigo enquanto CATALOG_API_TOKEN nao estiver definido, para
+    a separacao poder ser publicada antes de a variavel existir. Quando o
+    novo estiver no ar dos dois lados, remova ADMIN_API_TOKEN daqui.
+    """
+    novo = os.environ.get("CATALOG_API_TOKEN")
+    if novo:
+        return novo
+
+    antigo = os.environ.get("ADMIN_API_TOKEN")
+    if antigo:
+        logger.warning(
+            "Chamando o Catalogo com ADMIN_API_TOKEN. Defina CATALOG_API_TOKEN "
+            "e o mesmo valor como CATALOG_API_TOKEN no Catalogo."
+        )
+    return antigo
 
 
 def lookup(imdb_id: str) -> dict | None:
