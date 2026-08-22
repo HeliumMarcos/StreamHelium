@@ -83,3 +83,39 @@ def test_recording_a_view_never_breaks_playback(monkeypatch):
 
     # Nao levanta.
     db.record_title_view("user-1", "tt0137523")
+
+
+# --- a raiz: Meta não pode sujar `ep` ------------------------------------
+
+def _parse_series_id(stream_id):
+    """Só o trecho de Meta.__init__ que interpreta o id, sem rede nem cache."""
+    from sgd import utils as ut
+
+    ep, se = 0, 0
+    partes = ut.split_stream_id(stream_id)
+    if len(partes) >= 3 and str(partes[-1]).isdigit() and str(partes[-2]).isdigit():
+        ep = str(partes[-1]).zfill(2)
+        se = str(partes[-2]).zfill(2)
+    return se, ep
+
+
+def test_a_series_id_without_a_suffix_leaves_season_and_episode_alone():
+    """O defeito era `ep` receber o próprio id IMDb.
+
+    A atribuição de `ep` vinha antes de `se` estourar IndexError, e o
+    except engolia — sobrando ep="tt27497393". O int() disso estourava lá
+    na frente, no meio de uma resposta já iniciada.
+    """
+    se, ep = _parse_series_id("tt27497393")
+
+    assert (se, ep) == (0, 0)
+
+
+def test_a_complete_series_id_still_parses():
+    assert _parse_series_id("tt0903747:4:8") == ("04", "08")
+    assert _parse_series_id("tt0903747%3A4%3A8") == ("04", "08")
+
+
+def test_a_malformed_suffix_is_ignored_rather_than_trusted():
+    # Melhor não buscar do que buscar por "int('x')".
+    assert _parse_series_id("tt0903747:temporada:8") == (0, 0)

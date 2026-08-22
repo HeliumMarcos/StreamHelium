@@ -320,11 +320,18 @@ class Meta(IMDb):
         self.id = self.id_split[0]
 
         if stream_type == "series":
-            try:
-                self.ep = str(self.id_split[-1]).zfill(2)
-                self.se = str(self.id_split[-2]).zfill(2)
-            except IndexError:
-                pass
+            # Os dois juntos ou nenhum.
+            #
+            # Antes `ep` era atribuido primeiro e `se` estourava IndexError
+            # logo depois, engolido pelo except - entao um id de serie sem
+            # sufixo (series/tt1234567, que o Stremio pede) deixava
+            # ep="tt1234567" e se=0. O int() disso estourava la na frente,
+            # no meio da resposta ja iniciada: o cliente recebia JSON pela
+            # metade e nao mostrava opcao nenhuma.
+            partes = self.id_split
+            if len(partes) >= 3 and str(partes[-1]).isdigit() and str(partes[-2]).isdigit():
+                self.ep = str(partes[-1]).zfill(2)
+                self.se = str(partes[-2]).zfill(2)
 
         cached = Json(f"{self.id}.json")
         cached_at = cached.contents.get("cached_at")

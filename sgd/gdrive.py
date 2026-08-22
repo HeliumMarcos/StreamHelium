@@ -67,6 +67,13 @@ class GoogleDrive:
         logger.debug("Titles received: %s", sm.titles)
 
         if sm.stream_type == "series":
+            # Sem temporada e episodio nao ha o que procurar: um arquivo de
+            # serie so e identificavel pela tag SxxEyy. Devolver vazio e
+            # honesto; adivinhar traria a serie inteira.
+            if not (str(sm.se).isdigit() and str(sm.ep).isdigit() and int(sm.se) > 0):
+                logger.info("Series id without a season/episode; nothing to search for.")
+                return []
+
             # Mudado o método para 'name' para garantir que procure as tags S01E01 no arquivo de vídeo
             seep_q = self.qgen(
                 f"S{sm.se}E{sm.ep}, "
