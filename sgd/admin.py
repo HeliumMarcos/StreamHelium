@@ -211,7 +211,7 @@ def admin_home():
     return _page(
         "admin/users.html",
         active="users",
-        users=[_user_view(row) for row in db.list_users()],
+        users=[_user_view(row) for row in db.list_users(*actions.device_windows())],
         drive_accounts=drive_accounts,
         connected_drives=connected_drives,
         overview=db.get_admin_overview(),

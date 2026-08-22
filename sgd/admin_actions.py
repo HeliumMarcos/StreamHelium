@@ -178,6 +178,15 @@ def _minutes_since(moment) -> float | None:
     return (datetime.now(timezone.utc) - moment).total_seconds() / 60
 
 
+def device_windows() -> tuple[int, int]:
+    """As duas janelas, num lugar so: quem lista e quem interpreta usam as
+    mesmas, senao a contagem e a leitura discordariam."""
+    return (
+        int(os.environ.get("DEVICE_SESSION_TTL_MINUTES", "240")),
+        int(os.environ.get("PLAYBACK_IDLE_SECONDS", "180")),
+    )
+
+
 def device_state(user_row: dict) -> dict:
     """What device this family is on, and whether it is watching right now.
 
@@ -196,11 +205,18 @@ def device_state(user_row: dict) -> dict:
     device_idle = _minutes_since(user_row.get("device_last_seen"))
     playback_idle = _minutes_since(user_row.get("playback_last_seen"))
 
-    device_ttl = int(os.environ.get("DEVICE_SESSION_TTL_MINUTES", "240"))
-    playback_ttl = int(os.environ.get("PLAYBACK_IDLE_SECONDS", "180")) / 60
+    device_ttl, playback_secs = device_windows()
+    playback_ttl = playback_secs / 60
 
     playing = playback_idle is not None and playback_idle < playback_ttl
     known = device_idle is not None and device_idle < device_ttl
+
+    # Quantos, nao qual. Enquanto havia limite de um aparelho, a pergunta
+    # nao existia. Sem limite, dois tocando ao mesmo tempo e o sinal de que
+    # alguem esta usando a conta sem a familia saber - e e o unico jeito de
+    # perceber isso, porque ninguem mais e barrado.
+    devices = int(user_row.get("device_count") or 0)
+    streams = int(user_row.get("playback_count") or 0)
 
     return {
         "label": (user_row.get("device_label") or None) if known else None,
@@ -214,6 +230,14 @@ def device_state(user_row: dict) -> dict:
             if playing and user_row.get("playback_started_at")
             else None
         ),
+        "devices": devices,
+        "streams": streams,
+        # Duas reproducoes simultaneas nao provam nada sozinhas - a mesma
+        # pessoa pode ter comecado na TV e continuado no celular. E o que
+        # merece um olhar, e quem decide e quem conhece a familia.
+        "concurrent": streams >= 2,
+        "last_title": user_row.get("last_title_id"),
+        "last_title_at": user_row.get("last_title_at"),
     }
 
 

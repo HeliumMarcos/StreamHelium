@@ -90,7 +90,7 @@ def test_api_accepts_the_service_token(client):
 
 
 def test_api_responses_are_never_cached(client, monkeypatch):
-    monkeypatch.setattr("sgd.db.list_users", list)
+    monkeypatch.setattr("sgd.db.list_users", lambda *a, **k: [])
     resp = client.get("/api/admin/users", headers=auth())
     assert "no-store" in resp.headers["Cache-Control"]
 
@@ -112,7 +112,7 @@ def test_api_mutations_do_not_require_a_csrf_token(client, monkeypatch):
 # --- serialization ------------------------------------------------------
 
 def test_users_are_serialized_with_plain_json_types(client, monkeypatch):
-    monkeypatch.setattr("sgd.db.list_users", lambda: [user_row()])
+    monkeypatch.setattr("sgd.db.list_users", lambda *a, **k: [user_row()])
 
     body = client.get("/api/admin/users", headers=auth()).get_json()
     user = body["users"][0]
@@ -127,7 +127,7 @@ def test_users_are_serialized_with_plain_json_types(client, monkeypatch):
 def test_expired_account_is_reported_as_not_effectively_active(client, monkeypatch):
     monkeypatch.setattr(
         "sgd.db.list_users",
-        lambda: [user_row(expires_at=datetime(2020, 1, 1, tzinfo=timezone.utc))],
+        lambda *a, **k: [user_row(expires_at=datetime(2020, 1, 1, tzinfo=timezone.utc))],
     )
 
     user = client.get("/api/admin/users", headers=auth()).get_json()["users"][0]
@@ -140,7 +140,7 @@ def test_expired_account_is_reported_as_not_effectively_active(client, monkeypat
 def test_user_payload_never_carries_credentials(client, monkeypatch):
     monkeypatch.setattr(
         "sgd.db.list_users",
-        lambda: [user_row(password_hash="scrypt:32768:8:1$segredo", google_refresh_token="1//refresh")],
+        lambda *a, **k: [user_row(password_hash="scrypt:32768:8:1$segredo", google_refresh_token="1//refresh")],
     )
 
     raw = client.get("/api/admin/users", headers=auth()).get_data(as_text=True)
@@ -502,7 +502,7 @@ def test_device_is_reported_when_recently_seen(client, monkeypatch):
     from datetime import timedelta
 
     agora = datetime.now(timezone.utc)
-    monkeypatch.setattr("sgd.db.list_users", lambda: [user_row(
+    monkeypatch.setattr("sgd.db.list_users", lambda *a, **k: [user_row(
         device_label="Nuvio 0.8.4 (Android)",
         device_last_seen=agora - timedelta(minutes=7),
     )])
@@ -518,7 +518,7 @@ def test_device_is_reported_when_recently_seen(client, monkeypatch):
 def test_a_stale_device_is_reported_as_unknown(client, monkeypatch):
     from datetime import timedelta
 
-    monkeypatch.setattr("sgd.db.list_users", lambda: [user_row(
+    monkeypatch.setattr("sgd.db.list_users", lambda *a, **k: [user_row(
         device_label="Aparelho antigo",
         # Alem do DEVICE_SESSION_TTL_MINUTES padrao (240).
         device_last_seen=datetime.now(timezone.utc) - timedelta(hours=9),
@@ -538,7 +538,7 @@ def test_playback_is_reported_separately_from_the_device(client, monkeypatch):
     from datetime import timedelta
 
     agora = datetime.now(timezone.utc)
-    monkeypatch.setattr("sgd.db.list_users", lambda: [user_row(
+    monkeypatch.setattr("sgd.db.list_users", lambda *a, **k: [user_row(
         device_label="Stremio (Windows)",
         device_last_seen=agora - timedelta(minutes=2),
         playback_started_at=agora - timedelta(minutes=42),
@@ -555,7 +555,7 @@ def test_a_paused_playback_stops_counting_as_playing(client, monkeypatch):
     from datetime import timedelta
 
     agora = datetime.now(timezone.utc)
-    monkeypatch.setattr("sgd.db.list_users", lambda: [user_row(
+    monkeypatch.setattr("sgd.db.list_users", lambda *a, **k: [user_row(
         playback_started_at=agora - timedelta(minutes=50),
         # Alem do PLAYBACK_IDLE_SECONDS padrao (180s).
         playback_last_seen=agora - timedelta(minutes=6),
@@ -568,7 +568,7 @@ def test_a_paused_playback_stops_counting_as_playing(client, monkeypatch):
 
 
 def test_a_family_that_never_connected_reports_no_device(client, monkeypatch):
-    monkeypatch.setattr("sgd.db.list_users", lambda: [user_row()])
+    monkeypatch.setattr("sgd.db.list_users", lambda *a, **k: [user_row()])
 
     device = client.get("/api/admin/users", headers=auth()).get_json()["users"][0]["device"]
 
@@ -578,7 +578,7 @@ def test_a_family_that_never_connected_reports_no_device(client, monkeypatch):
 
 
 def test_raw_session_columns_do_not_leak_into_the_payload(client, monkeypatch):
-    monkeypatch.setattr("sgd.db.list_users", lambda: [user_row(
+    monkeypatch.setattr("sgd.db.list_users", lambda *a, **k: [user_row(
         device_label="Aparelho",
         device_last_seen=datetime.now(timezone.utc),
     )])
@@ -979,3 +979,68 @@ def test_the_password_still_never_leaves(client, monkeypatch):
     corpo = client.get(f"/api/admin/users/{UID}", headers=auth()).get_data(as_text=True)
 
     assert "segredo" not in corpo
+
+
+# --- vários dispositivos -------------------------------------------------
+
+def _com_sessoes(monkeypatch, **campos):
+    from datetime import datetime, timedelta, timezone
+    agora = datetime.now(timezone.utc)
+    base = {
+        "device_last_seen": agora - timedelta(minutes=1),
+        "playback_last_seen": agora - timedelta(seconds=10),
+        "playback_started_at": agora - timedelta(minutes=20),
+        "device_label": "Nuvio (Android)",
+    }
+    base.update(campos)
+    monkeypatch.setattr("sgd.db.list_users", lambda *a, **k: [user_row(**base)])
+
+
+def test_the_panel_learns_how_many_devices_are_in_use(client, monkeypatch):
+    """Enquanto havia limite de um aparelho, a pergunta não existia.
+
+    Sem limite, ninguém é barrado — e contar passou a ser o ÚNICO jeito de
+    perceber que alguém está usando a conta sem a família saber.
+    """
+    _com_sessoes(monkeypatch, device_count=3, playback_count=1)
+
+    device = client.get("/api/admin/users", headers=auth()).get_json()["users"][0]["device"]
+
+    assert device["devices"] == 3
+    assert device["streams"] == 1
+
+
+def test_two_streams_at_once_raise_the_flag(client, monkeypatch):
+    _com_sessoes(monkeypatch, device_count=2, playback_count=2)
+
+    device = client.get("/api/admin/users", headers=auth()).get_json()["users"][0]["device"]
+
+    assert device["concurrent"] is True
+
+
+def test_one_stream_does_not(client, monkeypatch):
+    _com_sessoes(monkeypatch, device_count=4, playback_count=1)
+
+    device = client.get("/api/admin/users", headers=auth()).get_json()["users"][0]["device"]
+
+    # Quatro aparelhos conhecidos e um tocando é uma família normal: TV,
+    # celular, tablet, notebook. O alerta é sobre simultaneidade.
+    assert device["concurrent"] is False
+
+
+def test_the_last_title_opened_is_reported(client, monkeypatch):
+    _com_sessoes(monkeypatch, last_title_id="tt0903747")
+
+    device = client.get("/api/admin/users", headers=auth()).get_json()["users"][0]["device"]
+
+    assert device["last_title"] == "tt0903747"
+
+
+def test_an_account_with_no_sessions_counts_zero(client, monkeypatch):
+    monkeypatch.setattr("sgd.db.list_users", lambda *a, **k: [user_row()])
+
+    device = client.get("/api/admin/users", headers=auth()).get_json()["users"][0]["device"]
+
+    assert device["devices"] == 0
+    assert device["streams"] == 0
+    assert device["concurrent"] is False

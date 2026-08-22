@@ -52,7 +52,7 @@ def test_admin_login_correct_password(client):
 def test_admin_home_lists_users(client, monkeypatch):
     monkeypatch.setattr(
         "sgd.db.list_users",
-        lambda: [{
+        lambda *a, **k: [{
             "id": "11111111-1111-1111-1111-111111111111",
             "email": "user@example.com",
             "display_name": "Fulano",
