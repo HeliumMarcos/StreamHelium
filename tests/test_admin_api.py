@@ -1,3 +1,4 @@
+import psycopg
 """JSON administrative API - the surface the Catálogo drives.
 
 The point of these tests is the contract: what the Catálogo can rely on,
@@ -186,7 +187,7 @@ def test_create_user_balances_across_the_pool_when_no_drive_is_chosen(client, mo
     captured = {}
     monkeypatch.setattr("sgd.db.pick_least_loaded_drive_account", lambda: {"id": UUID(DID)})
 
-    def fake_create(email, display_name=None, drive_account_id=None, expires_in_days=None, pinned=False):
+    def fake_create(email, display_name=None, drive_account_id=None, expires_in_days=None, pinned=False, idempotency_key=None):
         captured.update(drive_account_id=drive_account_id, pinned=pinned, days=expires_in_days)
         return user_row(email=email)
 
@@ -209,7 +210,7 @@ def test_create_user_balances_across_the_pool_when_no_drive_is_chosen(client, mo
 def test_create_user_pins_when_a_drive_is_chosen(client, monkeypatch):
     captured = {}
 
-    def fake_create(email, display_name=None, drive_account_id=None, expires_in_days=None, pinned=False):
+    def fake_create(email, display_name=None, drive_account_id=None, expires_in_days=None, pinned=False, idempotency_key=None):
         captured.update(drive_account_id=drive_account_id, pinned=pinned)
         return user_row()
 
@@ -228,12 +229,103 @@ def test_create_user_reports_a_duplicate_email_as_a_conflict(client, monkeypatch
     monkeypatch.setattr("sgd.db.pick_least_loaded_drive_account", lambda: None)
 
     def boom(*a, **k):
-        raise Exception("duplicate key value violates unique constraint")
+        raise psycopg.errors.UniqueViolation("duplicate key value violates unique constraint")
 
     monkeypatch.setattr("sgd.db.create_user", boom)
 
     resp = client.post("/api/admin/users", json={"email": "ja@existe.com"}, headers=auth())
     assert resp.status_code == 409
+
+
+def test_a_bug_is_not_disguised_as_a_duplicate_email(client, monkeypatch):
+    """Erro de programação tem que estourar, não virar 409.
+
+    A captura era `except Exception`, então uma assinatura errada em
+    db.create_user chegava ao usuário como "verifique se o e-mail já está
+    cadastrado" — e a pessoa conferia o e-mail em vez de reportar o bug.
+    """
+    monkeypatch.setattr("sgd.db.pick_least_loaded_drive_account", lambda: None)
+
+    def bug(*a, **k):
+        raise TypeError("create_user() got an unexpected keyword argument")
+
+    monkeypatch.setattr("sgd.db.create_user", bug)
+
+    resp = client.post("/api/admin/users", json={"email": "nova@exemplo.com"}, headers=auth())
+
+    # 500 e a resposta honesta: algo quebrou do nosso lado. 409 mandaria a
+    # pessoa conferir um e-mail que nao tem nada de errado.
+    assert resp.status_code == 500
+
+
+def test_repeating_a_signup_returns_the_same_account(client, monkeypatch):
+    """O caso que deixava a pessoa sem conta e sem saída.
+
+    O cadastro escreve em dois bancos que nenhuma transação cobre: cria a
+    conta aqui, define a senha, e só então grava o vínculo no MySQL. Se o
+    terceiro passo falhava, sobrava usuário aqui sem vínculo lá — e
+    repetir dava 409 de e-mail duplicado.
+
+    Com a chave, repetir devolve a MESMA conta, e a tentativa seguinte
+    completa o que faltou.
+    """
+    existente = user_row(email="ja@existe.com")
+    monkeypatch.setattr("sgd.db.user_by_idempotency_key",
+                        lambda chave: existente if chave == "convite-abc" else None)
+
+    def nao_deveria(*a, **k):
+        raise AssertionError("não pode tentar criar de novo")
+
+    monkeypatch.setattr("sgd.db.create_user", nao_deveria)
+
+    resp = client.post(
+        "/api/admin/users",
+        json={"email": "ja@existe.com", "idempotency_key": "convite-abc"},
+        headers=auth(),
+    )
+
+    # 200 e nao 201: nada foi criado agora.
+    assert resp.status_code == 200
+    assert resp.get_json()["reused"] is True
+    assert resp.get_json()["user"]["email"] == "ja@existe.com"
+
+
+def test_a_first_signup_still_creates(client, monkeypatch):
+    monkeypatch.setattr("sgd.db.user_by_idempotency_key", lambda chave: None)
+    monkeypatch.setattr("sgd.db.pick_least_loaded_drive_account", lambda: None)
+
+    recebido = {}
+
+    def fake_create(email, display_name=None, drive_account_id=None,
+                    expires_in_days=None, pinned=False, idempotency_key=None):
+        recebido["chave"] = idempotency_key
+        return user_row(email=email)
+
+    monkeypatch.setattr("sgd.db.create_user", fake_create)
+
+    resp = client.post(
+        "/api/admin/users",
+        json={"email": "nova@exemplo.com", "idempotency_key": "convite-xyz"},
+        headers=auth(),
+    )
+
+    assert resp.status_code == 201
+    # A chave precisa CHEGAR ao banco; sem isso a segunda tentativa não
+    # teria como se reconhecer.
+    assert recebido["chave"] == "convite-xyz"
+
+
+def test_a_signup_without_a_key_behaves_as_before(client, monkeypatch):
+    monkeypatch.setattr("sgd.db.pick_least_loaded_drive_account", lambda: None)
+    monkeypatch.setattr(
+        "sgd.db.create_user",
+        lambda email, display_name=None, drive_account_id=None, expires_in_days=None,
+               pinned=False, idempotency_key=None: user_row(email=email),
+    )
+
+    resp = client.post("/api/admin/users", json={"email": "sem@chave.com"}, headers=auth())
+
+    assert resp.status_code == 201
 
 
 def test_unknown_user_is_a_404(client, monkeypatch):

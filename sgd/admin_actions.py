@@ -16,6 +16,8 @@ whatever it speaks - a flash message or an HTTP status.
 
 import logging
 import os
+
+import psycopg
 from datetime import datetime, timezone
 
 from sgd import db
@@ -222,13 +224,21 @@ def create_user(
     display_name: str | None = None,
     expires_in_days=None,
     drive_account_id: str | None = None,
+    idempotency_key: str | None = None,
 ) -> dict:
     """Creates a family account, assigning a pool Drive account.
 
     An explicit choice pins the family to that Drive; leaving it empty
     balances across the pool and stays unpinned, so later rebalancing is
     free to move it.
+
+    `idempotency_key` torna a chamada repetivel: com a mesma chave, a
+    segunda tentativa devolve a MESMA conta em vez de erro de e-mail
+    duplicado. Existe porque o cadastro escreve em dois bancos que
+    nenhuma transacao cobre - falhar depois de criar aqui deixava a pessoa
+    sem conta e sem como repetir.
     """
+    idempotency_key = _clean_optional(idempotency_key)
     email = _clean_email(email)
     display_name = _clean_optional(display_name)
 
@@ -253,10 +263,22 @@ def create_user(
             drive_account_id=assigned_drive_id,
             expires_in_days=days,
             pinned=pinned,
+            idempotency_key=idempotency_key,
         )
-    except Exception as e:
-        # The realistic cause is the UNIQUE on email; anything else is
-        # still the caller's problem to see, and the detail is in the log.
+    except psycopg.Error as e:
+        # Duas chamadas simultaneas com a mesma chave: uma insere, a outra
+        # bate no indice unico. Devolver a conta que venceu e a resposta
+        # certa - as duas pediam a mesma coisa.
+        if idempotency_key:
+            try:
+                ja = db.user_by_idempotency_key(idempotency_key)
+            except Exception:
+                ja = None
+            if ja:
+                return ja
+
+        # Fora isso a causa realista e o UNIQUE do e-mail; o detalhe fica
+        # no log e o problema continua sendo de quem chamou.
         logger.warning("Failed to create user %s: %s", email, e)
         raise AdminActionError(
             "Não foi possível criar a conta. Verifique se o e-mail já está cadastrado.",

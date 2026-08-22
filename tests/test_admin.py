@@ -1,5 +1,6 @@
 import re
 
+import psycopg
 import pytest
 
 from sgd import app
@@ -104,7 +105,7 @@ def test_admin_create_user_calls_db(client, monkeypatch):
     calls = []
     monkeypatch.setattr(
         "sgd.db.create_user",
-        lambda email, display_name, drive_account_id=None, expires_in_days=None, pinned=False:
+        lambda email, display_name, drive_account_id=None, expires_in_days=None, pinned=False, idempotency_key=None:
             calls.append((email, display_name, drive_account_id, expires_in_days, pinned)),
     )
     _login(client)
@@ -124,7 +125,7 @@ def test_admin_create_user_with_pinned_drive(client, monkeypatch):
     calls = []
     monkeypatch.setattr(
         "sgd.db.create_user",
-        lambda email, display_name, drive_account_id=None, expires_in_days=None, pinned=False:
+        lambda email, display_name, drive_account_id=None, expires_in_days=None, pinned=False, idempotency_key=None:
             calls.append((email, display_name, drive_account_id, expires_in_days, pinned)),
     )
     _login(client)
@@ -169,7 +170,9 @@ def test_admin_create_user_reports_database_failure(client, monkeypatch):
     monkeypatch.setattr("sgd.db.pick_least_loaded_drive_account", lambda: None)
 
     def boom(*args, **kwargs):
-        raise RuntimeError("duplicate")
+        # psycopg.Error e nao RuntimeError: so erro de banco vira "verifique
+        # o e-mail". Erro de programacao tem que estourar.
+        raise psycopg.errors.UniqueViolation("duplicate key")
 
     monkeypatch.setattr("sgd.db.create_user", boom)
     _login(client)

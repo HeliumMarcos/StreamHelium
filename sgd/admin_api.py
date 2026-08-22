@@ -243,11 +243,26 @@ def api_list_users():
 @endpoint("/users", methods=["POST"])
 def api_create_user():
     body = _json_body()
+    chave = body.get("idempotency_key")
+
+    # Antes de criar: esta mesma tentativa ja passou por aqui? Se sim, a
+    # resposta e a conta que ela criou, e o status e 200 - nada foi criado
+    # agora.
+    if chave:
+        try:
+            ja = db.user_by_idempotency_key(str(chave).strip())
+        except Exception as e:
+            logger.warning("Idempotency lookup failed: %s", e)
+            ja = None
+        if ja:
+            return _ok({"user": _user_json(ja), "reused": True}, 200)
+
     user = actions.create_user(
         email=body.get("email"),
         display_name=body.get("display_name"),
         expires_in_days=body.get("expires_in_days"),
         drive_account_id=body.get("drive_account_id"),
+        idempotency_key=chave,
     )
     return _ok({"user": _user_json(user)}, 201)
 
