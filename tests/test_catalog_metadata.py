@@ -187,3 +187,35 @@ def test_a_nonsense_year_from_the_catalogue_is_ignored(monkeypatch):
     meta.get_meta_from_catalog()
 
     assert meta.year is None
+
+def test_the_request_identifies_itself(monkeypatch):
+    """Sem User-Agent próprio, o mod_security da HostGator devolvia 406.
+
+    O sintoma não parecia bloqueio: aparecia como filme sem nenhuma opção
+    de stream, e só nos títulos cujo arquivo no Drive foi nomeado pelo
+    nome curado — porque a consulta recusada é justamente a que traz esse
+    nome. O addon caía para TMDB em silêncio.
+    """
+    monkeypatch.setenv("CATALOG_API_URL", "https://catalogo.exemplo")
+    monkeypatch.setenv("CATALOG_API_TOKEN", "segredo")
+
+    capturado = {}
+
+    class Resposta:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"titles": ["Filme"], "type": "movie"}
+
+    def fake_get(url, headers=None, timeout=None):
+        capturado["headers"] = headers or {}
+        return Resposta()
+
+    monkeypatch.setattr("sgd.catalog.requests.get", fake_get)
+
+    catalog.lookup("tt1234567")
+
+    ua = capturado["headers"].get("User-Agent", "")
+    assert ua, "a requisição precisa se identificar"
+    assert "python-requests" not in ua, "este é exatamente o User-Agent que leva 406"
