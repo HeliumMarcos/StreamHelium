@@ -44,6 +44,26 @@ jobs:
       - name: testes do worker
         run: node --test tests/cf_proxy.test.mjs
 
+      # Sem isto, um secret ausente falha com um erro do wrangler que fala
+      # de "ambiente nao interativo" e nao diz onde criar o que falta.
+      - name: conferir o segredo
+        run: |
+          if [ -z "${{ secrets.CLOUDFLARE_API_TOKEN }}" ]; then
+            echo "::error title=Falta o CLOUDFLARE_API_TOKEN::O segredo nao existe neste repositorio, entao o Worker nao pode ser publicado."
+            echo ""
+            echo "Como resolver, uma vez so:"
+            echo "  1. Cloudflare -> My Profile -> API Tokens -> Create Token"
+            echo "  2. Template 'Edit Cloudflare Workers'"
+            echo "  3. https://github.com/${{ github.repository }}/settings/secrets/actions/new"
+            echo "     Nome:  CLOUDFLARE_API_TOKEN"
+            echo "     Valor: o token copiado"
+            echo ""
+            echo "Precisa ser um secret de ACTIONS do repositorio - um secret"
+            echo "de environment nao e visto por um job que nao declara"
+            echo "'environment:', e e um engano facil de cometer."
+            exit 1
+          fi
+
       - name: publicar
         uses: cloudflare/wrangler-action@v3
         with:
