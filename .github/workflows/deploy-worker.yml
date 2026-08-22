@@ -1,0 +1,53 @@
+# Publica o Worker sozinho, a cada mudança nele em main.
+#
+# Existe por causa de um erro real: o deploy era feito à mão a partir de
+# uma cópia local sem git, e num dia essa cópia estava três semanas
+# atrasada. O `wrangler deploy` publicou fielmente um cf_proxy.js anterior
+# às URLs assinadas — a verificação de assinatura sumiu de produção e
+# ninguém teria notado, porque tudo continuou tocando.
+#
+# Uma cópia local sempre acaba desatualizando. O que não desatualiza é o
+# que está no repositório.
+name: publica o worker
+
+on:
+  push:
+    branches: [main]
+    # Só quando o Worker muda de fato. Um commit no Python não precisa
+    # republicar a borda que entrega vídeo.
+    paths:
+      - cf_proxy.js
+      - wrangler.toml
+      - .github/workflows/deploy-worker.yml
+  # Para republicar sem precisar de um commit — por exemplo, depois de
+  # trocar um secret.
+  workflow_dispatch:
+
+# Duas publicações ao mesmo tempo poderiam terminar fora de ordem e
+# deixar a versão antiga por cima.
+concurrency:
+  group: worker-deploy
+  cancel-in-progress: false
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # O portão. Publicar um Worker que não passa nos próprios testes é
+      # justamente o que este arquivo existe para impedir.
+      - name: testes do worker
+        run: node --test tests/cf_proxy.test.mjs
+
+      - name: publicar
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          # Os secrets do Worker (TOKEN_ENDPOINT_SECRET) NÃO são tocados
+          # por um deploy: eles persistem. Só as vars do wrangler.toml
+          # sobem junto.
