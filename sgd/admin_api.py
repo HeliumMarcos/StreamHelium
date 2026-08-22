@@ -334,6 +334,34 @@ def api_reset_password(uid):
     return _ok({"user": _user_json(user)})
 
 
+@endpoint("/users/<uid>/activity")
+def api_user_activity(uid):
+    """Aparelhos, historico e o que esta tocando — num pedido so.
+
+    Separado da listagem de proposito: sao varias linhas por pessoa, e
+    carregar isso para as onze contas de uma vez para mostrar uma custaria
+    caro sem servir a ninguem. O painel busca quando abre.
+    """
+    if not db.get_user(uid):
+        return _error("Usuário não encontrado.", 404)
+
+    _, playback_secs = actions.device_windows()
+
+    def seguro(consulta, *args):
+        # Uma metade indisponivel nao pode levar as outras duas junto.
+        try:
+            return [_row(dict(linha)) for linha in consulta(*args)]
+        except Exception as e:
+            logger.warning("Activity query failed for %s: %s", uid, e)
+            return []
+
+    return _ok({
+        "devices": seguro(db.devices_of, uid),
+        "titles": seguro(db.titles_of, uid),
+        "playing": seguro(db.playing_now, uid, playback_secs),
+    })
+
+
 @endpoint("/users/<uid>/stream-token", methods=["POST"])
 def api_rotate_stream_token(uid):
     """Da a conta um endereco novo de addon e mata o anterior.

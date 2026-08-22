@@ -111,7 +111,7 @@ def test_failed_refresh_is_502(client, monkeypatch):
 
 def test_playback_claim_grants_and_reports_renewal(client, monkeypatch):
     monkeypatch.setenv("PROXY_SHARED_SECRET", "shared-secret")
-    monkeypatch.setattr("sgd.db.claim_playback_session", lambda *a: True)
+    monkeypatch.setattr("sgd.db.claim_playback_session", lambda *a, **k: True)
 
     resp = client.post(
         f"/internal/playback/{ACCOUNT}", headers=_auth(), json={"session": "sess-1"}

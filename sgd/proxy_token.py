@@ -149,8 +149,16 @@ def playback_claim(viewer_id):
     if not session_id or not isinstance(session_id, str):
         return jsonify({"error": "missing_session"}), 400
 
+    corpo = request.get_json(silent=True) or {}
+
     try:
-        db.claim_playback_session(viewer_id, session_id, PLAYBACK_IDLE_SECONDS)
+        db.claim_playback_session(
+            viewer_id, session_id, PLAYBACK_IDLE_SECONDS,
+            file_id=(corpo.get("file_id") or None),
+            # Cortado: nome de arquivo de video passa de 200 caracteres com
+            # facilidade, e o painel mostra o comeco de qualquer jeito.
+            file_name=((corpo.get("file_name") or "")[:300] or None),
+        )
     except Exception as e:
         logger.warning("Playback record failed, allowing playback: %s", e)
         return jsonify({"granted": True, "degraded": True})

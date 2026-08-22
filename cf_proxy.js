@@ -150,7 +150,12 @@ async function authorizeAndStream(env, request, url, accountId, fileId) {
   //
   // O addon ja concede sempre, entao este Worker nao precisa ser
   // republicado para o bloqueio sumir. Isto aqui so tira o caminho morto.
-  await touchPlaybackSession(env, viewer, session)
+  // O nome do arquivo vai junto: e a unica peca do quebra-cabeca que so o
+  // Worker tem. O addon sabe quais arquivos EXISTEM para um titulo; qual
+  // deles a pessoa escolheu, so quem serve os bytes descobre.
+  const fileName = decodeURIComponent(url.pathname.split("/").filter(Boolean).pop() || "")
+
+  await touchPlaybackSession(env, viewer, session, fileId, fileName)
 
   return streamFile(env, request, accountId, fileId)
 }
@@ -205,10 +210,12 @@ const SLOT_CACHE_MS = 45_000
 // Nao pede permissao: so avisa que a reproducao segue viva, para o painel
 // mostrar quem esta assistindo. O retorno existe por simetria com o
 // codigo antigo e nunca e usado para barrar nada.
-async function touchPlaybackSession(env, viewer, session) {
+async function touchPlaybackSession(env, viewer, session, fileId, fileName) {
   if (!env.TOKEN_ENDPOINT || !env.TOKEN_ENDPOINT_SECRET) return "granted"
 
-  const key = `${viewer}|${session}`
+  // O arquivo entra na chave do cache: trocar de episodio dentro da
+  // janela de 45s tem que avisar, senao o painel mostraria o anterior.
+  const key = `${viewer}|${session}|${fileId}`
   const cached = slotCache.get(key)
   if (cached && cached.until > Date.now()) return cached.verdict
 
@@ -221,7 +228,7 @@ async function touchPlaybackSession(env, viewer, session) {
         Authorization: `Bearer ${env.TOKEN_ENDPOINT_SECRET}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ session }),
+      body: JSON.stringify({ session, file_id: fileId, file_name: fileName }),
     })
   } catch (e) {
     // Fail open, like the addon does on a database error. The limit is a
