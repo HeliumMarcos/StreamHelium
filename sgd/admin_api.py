@@ -242,7 +242,7 @@ def api_overview():
 
 @endpoint("/users")
 def api_list_users():
-    return _ok({"users": [_user_json(row) for row in db.list_users()]})
+    return _ok({"users": [_user_json(row) for row in db.list_users(*actions.device_windows())]})
 
 
 @endpoint("/users", methods=["POST"])

@@ -170,6 +170,41 @@ def init_schema():
             """
         )
 
+        # As duas tabelas acima nasceram com user_id como chave primaria:
+        # uma linha por pessoa, porque so podia haver um aparelho por vez.
+        # O limite foi removido, e o modelo ficou para tras — hoje o
+        # segundo aparelho apenas SOBRESCREVE o primeiro, e nao ha como
+        # saber que existem dois.
+        #
+        # Alargar a chave e o que torna possivel contar. E contar e o que
+        # transforma "alguem esta usando" em "duas pessoas estao usando ao
+        # mesmo tempo", que e o sinal que interessa desde que o bloqueio
+        # saiu.
+        #
+        # Idempotente pelo nome da constraint: rodar de novo nao faz nada.
+        for tabela, coluna, nome in (
+            ("device_sessions", "fingerprint", "device_sessions_user_device_pk"),
+            ("playback_sessions", "session_id", "playback_sessions_user_session_pk"),
+        ):
+            conn.execute(
+                f"""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint WHERE conname = '{nome}'
+                    ) THEN
+                        ALTER TABLE {tabela} DROP CONSTRAINT IF EXISTS {tabela}_pkey;
+                        ALTER TABLE {tabela}
+                            ADD CONSTRAINT {nome} PRIMARY KEY (user_id, {coluna});
+                    END IF;
+                END $$;
+                """
+            )
+            conn.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_{tabela}_user "
+                f"ON {tabela} (user_id, last_seen DESC);"
+            )
+
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS settings (
@@ -431,25 +466,63 @@ def create_user(
         ).fetchone()
 
 
-def list_users() -> list[dict]:
+def list_users(device_ttl_minutes: int = 240, playback_idle_seconds: int = 180) -> list[dict]:
+    """Uma linha por pessoa, com o que o painel precisa mostrar.
+
+    As duas laterais contam em vez de pegar a ultima linha: desde que o
+    limite de um aparelho saiu, o que interessa nao e QUAL aparelho, e
+    QUANTOS — dois assistindo ao mesmo tempo e o sinal de que alguem esta
+    usando a conta sem a familia saber.
+
+    As janelas entram como parametro porque quem as define e quem chama:
+    duplicar os defaults aqui daria dois lugares para mudar e um deles
+    ficaria para tras.
+    """
     with get_conn() as conn:
         return conn.execute(
             """
             SELECT u.id, u.email, u.display_name, u.active, u.invite_token,
                    u.drive_account_id, u.drive_account_pinned, u.expires_at,
-                   u.created_at, u.connected_at,
+                   u.created_at, u.connected_at, u.stream_token,
                    (u.tmdb_api_key IS NOT NULL) AS tmdb_connected,
                    (u.password_hash IS NOT NULL) AS has_password,
                    da.label AS drive_label,
-                   ds.device_label, ds.last_seen AS device_last_seen,
-                   ps.started_at AS playback_started_at,
-                   ps.last_seen AS playback_last_seen
+                   d.device_label, d.last_seen AS device_last_seen,
+                   COALESCE(d.recentes, 0) AS device_count,
+                   p.started_at AS playback_started_at,
+                   p.last_seen AS playback_last_seen,
+                   COALESCE(p.tocando, 0) AS playback_count,
+                   t.imdb_id AS last_title_id, t.last_seen AS last_title_at
             FROM users u
             LEFT JOIN drive_accounts da ON da.id = u.drive_account_id
-            LEFT JOIN device_sessions ds ON ds.user_id = u.id
-            LEFT JOIN playback_sessions ps ON ps.user_id = u.id
+
+            LEFT JOIN LATERAL (
+                SELECT count(*) FILTER (
+                           WHERE last_seen > now() - make_interval(mins => %s)
+                       ) AS recentes,
+                       (array_agg(device_label ORDER BY last_seen DESC))[1] AS device_label,
+                       max(last_seen) AS last_seen
+                FROM device_sessions WHERE user_id = u.id
+            ) d ON TRUE
+
+            LEFT JOIN LATERAL (
+                SELECT count(*) FILTER (
+                           WHERE last_seen > now() - make_interval(secs => %s)
+                       ) AS tocando,
+                       min(started_at) AS started_at,
+                       max(last_seen) AS last_seen
+                FROM playback_sessions WHERE user_id = u.id
+            ) p ON TRUE
+
+            LEFT JOIN LATERAL (
+                SELECT imdb_id, last_seen
+                FROM title_views WHERE user_id = u.id
+                ORDER BY last_seen DESC LIMIT 1
+            ) t ON TRUE
+
             ORDER BY u.created_at DESC
-            """
+            """,
+            (device_ttl_minutes, playback_idle_seconds),
         ).fetchall()
 
 
@@ -675,8 +748,7 @@ def touch_device_session(
             """
             INSERT INTO device_sessions (user_id, fingerprint, device_label, last_seen)
             VALUES (%s, %s, %s, %s)
-            ON CONFLICT (user_id) DO UPDATE SET
-                fingerprint = EXCLUDED.fingerprint,
+            ON CONFLICT (user_id, fingerprint) DO UPDATE SET
                 device_label = EXCLUDED.device_label,
                 last_seen = EXCLUDED.last_seen
             """,
@@ -718,14 +790,8 @@ def claim_playback_session(user_id: str, session_id: str, idle_seconds: int) -> 
             """
             INSERT INTO playback_sessions (user_id, session_id, last_seen)
             VALUES (%s, %s, %s)
-            ON CONFLICT (user_id) DO UPDATE SET
-                session_id = EXCLUDED.session_id,
-                last_seen = EXCLUDED.last_seen,
-                started_at = CASE
-                    WHEN playback_sessions.session_id = EXCLUDED.session_id
-                    THEN playback_sessions.started_at
-                    ELSE EXCLUDED.last_seen
-                END
+            ON CONFLICT (user_id, session_id) DO UPDATE SET
+                last_seen = EXCLUDED.last_seen
             """,
             (user_id, session_id, now),
         )
