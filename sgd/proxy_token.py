@@ -96,11 +96,16 @@ def drive_token(account_id):
         access_token = drive.get_acc_token()
     except Exception as e:
         logger.error("Drive token fetch failed for account %s: %s", account_id, e)
+        db.record_event("drive_sem_token", account_id)
         return jsonify({"error": "token_refresh_failed"}), 502
 
     if not access_token:
         # get_acc_token() logs the actual OAuth error and returns None.
         logger.error("No access token available for drive account %s", account_id)
+        # Na pratica isto e o invalid_grant: a autorizacao do Google foi
+        # revogada e a conta precisa ser reconectada. Sem reproducao
+        # nenhuma por aquele Drive ate alguem perceber.
+        db.record_event("drive_sem_token", account_id)
         return jsonify({"error": "token_refresh_failed"}), 502
 
     expires_in = _seconds_until_expiry(drive)

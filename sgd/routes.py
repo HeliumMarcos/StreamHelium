@@ -327,6 +327,14 @@ def addon_stream(user_id, stream_type, stream_id):
         abort(404)
 
 
+def _anotar_evento(kind, detail=""):
+    """Registra um problema de operacao sem nunca atrapalhar a reproducao."""
+    try:
+        db.record_event(kind, detail)
+    except Exception:
+        pass
+
+
 def _record_view(user_id, stream_id):
     """Marca que esta conta abriu este titulo.
 
@@ -359,17 +367,34 @@ def get_streams(gdrive, stream_type, stream_id, viewer_id=None, session_id=None)
     start_time = datetime.now()
     time_taken = lambda st: f"{(datetime.now() - st).total_seconds():.3f}s"
 
-    stream_meta = Meta(stream_type, stream_id)
-    gdrive.search(stream_meta)
-    logger.info(
-        "Got %d/%d unique results from gdrive after deduping in %s. Scoring results...",
-        len(gdrive.results), gdrive.len_response, time_taken(start_time),
-    )
-    streams = Streams(gdrive, stream_meta, viewer_id=viewer_id, session_id=session_id)
-    logger.info(
-        "Fetched %d/%d valid stream(s) in %s for %s -> %s",
-        len(streams.results), len(gdrive.results), time_taken(start_time),
-        stream_id, gdrive.query,
-    )
+    try:
+        stream_meta = Meta(stream_type, stream_id)
+        gdrive.search(stream_meta)
+        logger.info(
+            "Got %d/%d unique results from gdrive after deduping in %s. Scoring results...",
+            len(gdrive.results), gdrive.len_response, time_taken(start_time),
+        )
+        streams = Streams(gdrive, stream_meta, viewer_id=viewer_id, session_id=session_id)
+        logger.info(
+            "Fetched %d/%d valid stream(s) in %s for %s -> %s",
+            len(streams.results), len(gdrive.results), time_taken(start_time),
+            stream_id, gdrive.query,
+        )
+    except Exception as e:
+        # O corpo ja comecou a ser transmitido, entao o status ja foi 200 e
+        # nao ha como voltar atras. Sem isto o cliente recebia JSON pela
+        # metade: nenhuma opcao aparecia, e nada indicava erro para quem
+        # estava tentando assistir. Fechar com uma lista vazia pelo menos
+        # entrega algo valido - e o evento abaixo conta o que aconteceu.
+        logger.exception("Stream search blew up for %s", stream_id)
+        _anotar_evento("erro_no_stream", f"{type(e).__name__}: {stream_id}")
+        yield "[]}"
+        return
+
+    if not streams.results:
+        # Titulo pedido e nada encontrado. Um de vez em quando e normal;
+        # muitos seguidos costumam significar Drive fora do ar, autorizacao
+        # revogada ou arquivo nomeado fora do padrao.
+        _anotar_evento("sem_resultado", stream_id)
 
     yield f"{dumps(streams.results)}}}"

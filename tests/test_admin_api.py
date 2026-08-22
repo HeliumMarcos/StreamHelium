@@ -879,3 +879,55 @@ def test_asking_about_an_unknown_user_is_a_404(client, monkeypatch):
 def test_the_view_endpoints_need_the_service_token(client):
     assert client.get("/api/admin/views/top").status_code == 401
     assert client.get(f"/api/admin/views/user/{UID}").status_code == 401
+
+
+# --- eventos de operação -------------------------------------------------
+
+def test_events_are_reported_for_the_panel(client, monkeypatch):
+    from datetime import date, datetime, timezone
+
+    monkeypatch.setattr("sgd.db.recent_events", lambda dias, *a, **k: [{
+        "kind": "catalogo_recusou",
+        "detail": "HTTP 406",
+        "day": date(2026, 8, 22),
+        "count": 47,
+        "first_seen": datetime(2026, 8, 22, 1, 0, tzinfo=timezone.utc),
+        "last_seen": datetime(2026, 8, 22, 1, 30, tzinfo=timezone.utc),
+    }])
+
+    resp = client.get("/api/admin/events", headers=auth())
+
+    assert resp.status_code == 200
+    evento = resp.get_json()["events"][0]
+    assert evento["kind"] == "catalogo_recusou"
+    # O contador é o que distingue "aconteceu uma vez" de "está acontecendo
+    # em toda reprodução" — que era exatamente o caso do 406.
+    assert evento["count"] == 47
+
+
+def test_a_broken_history_does_not_break_the_screen(client, monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("sem banco")
+
+    monkeypatch.setattr("sgd.db.recent_events", boom)
+
+    resp = client.get("/api/admin/events", headers=auth())
+
+    # A tela existe para mostrar o que está quebrado; ela não pode ser mais
+    # uma coisa quebrada.
+    assert resp.status_code == 200
+    assert resp.get_json() == {"events": [], "degraded": True}
+
+
+def test_the_window_is_bounded(client, monkeypatch):
+    pedidos = []
+    monkeypatch.setattr("sgd.db.recent_events", lambda dias, *a, **k: pedidos.append(dias) or [])
+
+    client.get("/api/admin/events?days=9999", headers=auth())
+    client.get("/api/admin/events?days=abacaxi", headers=auth())
+
+    assert pedidos == [60, 7]
+
+
+def test_events_need_the_service_token(client):
+    assert client.get("/api/admin/events").status_code == 401
