@@ -169,6 +169,11 @@ def init_schema():
             );
             """
         )
+        # Qual arquivo esta tocando. So o Worker sabe: o addon conhece os
+        # arquivos que EXISTEM para um titulo, mas qual deles a pessoa
+        # escolheu se decide na hora de servir os bytes.
+        conn.execute("ALTER TABLE playback_sessions ADD COLUMN IF NOT EXISTS file_id TEXT;")
+        conn.execute("ALTER TABLE playback_sessions ADD COLUMN IF NOT EXISTS file_name TEXT;")
 
         # As duas tabelas acima nasceram com user_id como chave primaria:
         # uma linha por pessoa, porque so podia haver um aparelho por vez.
@@ -769,7 +774,10 @@ def clear_device_session(user_id: str) -> None:
         conn.execute("DELETE FROM device_sessions WHERE user_id = %s", (user_id,))
 
 
-def claim_playback_session(user_id: str, session_id: str, idle_seconds: int) -> bool:
+def claim_playback_session(
+    user_id: str, session_id: str, idle_seconds: int,
+    file_id: str | None = None, file_name: str | None = None,
+) -> bool:
     """Called by the Worker while a viewer is actually streaming bytes.
 
     Ja recusou, e era esse o problema relatado: um `session_id` novo nasce
@@ -788,12 +796,16 @@ def claim_playback_session(user_id: str, session_id: str, idle_seconds: int) -> 
 
         conn.execute(
             """
-            INSERT INTO playback_sessions (user_id, session_id, last_seen)
-            VALUES (%s, %s, %s)
+            INSERT INTO playback_sessions (user_id, session_id, last_seen, file_id, file_name)
+            VALUES (%s, %s, %s, %s, %s)
             ON CONFLICT (user_id, session_id) DO UPDATE SET
-                last_seen = EXCLUDED.last_seen
+                last_seen = EXCLUDED.last_seen,
+                -- COALESCE para um ping sem arquivo nao apagar o que ja
+                -- estava guardado.
+                file_id = COALESCE(EXCLUDED.file_id, playback_sessions.file_id),
+                file_name = COALESCE(EXCLUDED.file_name, playback_sessions.file_name)
             """,
-            (user_id, session_id, now),
+            (user_id, session_id, now, file_id, file_name),
         )
         return True
 
@@ -936,6 +948,58 @@ def record_event(kind: str, detail: str = "") -> None:
             )
     except Exception as e:
         logger.warning("Could not record ops event %s: %s", kind, e)
+
+
+def devices_of(user_id: str, limit: int = 10) -> list[dict]:
+    """Os aparelhos que esta conta usou, do mais recente para o mais antigo.
+
+    "3 aparelhos" nao diz a ninguem o que fazer. "TV da sala, celular, e um
+    terceiro que voce nao reconhece" diz.
+    """
+    with get_conn() as conn:
+        return conn.execute(
+            """
+            SELECT device_label, fingerprint, started_at, last_seen
+            FROM device_sessions
+            WHERE user_id = %s
+            ORDER BY last_seen DESC
+            LIMIT %s
+            """,
+            (user_id, limit),
+        ).fetchall()
+
+
+def titles_of(user_id: str, limit: int = 10) -> list[dict]:
+    """Os ultimos titulos que esta conta abriu.
+
+    A tabela ja guardava tudo; so o mais recente era lido. Uma lista diz
+    o que a pessoa assiste - o ultimo sozinho nao diz nada.
+    """
+    with get_conn() as conn:
+        return conn.execute(
+            """
+            SELECT imdb_id, views, first_seen, last_seen
+            FROM title_views
+            WHERE user_id = %s
+            ORDER BY last_seen DESC
+            LIMIT %s
+            """,
+            (user_id, limit),
+        ).fetchall()
+
+
+def playing_now(user_id: str, idle_seconds: int = 180) -> list[dict]:
+    """O que esta tocando agora, com o arquivo escolhido."""
+    with get_conn() as conn:
+        return conn.execute(
+            """
+            SELECT session_id, file_id, file_name, started_at, last_seen
+            FROM playback_sessions
+            WHERE user_id = %s AND last_seen > now() - make_interval(secs => %s)
+            ORDER BY last_seen DESC
+            """,
+            (user_id, idle_seconds),
+        ).fetchall()
 
 
 def recent_events(days: int = 7, limit: int = 50) -> list[dict]:

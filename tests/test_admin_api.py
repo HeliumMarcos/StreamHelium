@@ -1044,3 +1044,56 @@ def test_an_account_with_no_sessions_counts_zero(client, monkeypatch):
     assert device["devices"] == 0
     assert device["streams"] == 0
     assert device["concurrent"] is False
+
+
+# --- atividade da conta --------------------------------------------------
+
+def test_activity_answers_devices_history_and_what_is_playing(client, monkeypatch):
+    from datetime import datetime, timezone
+    agora = datetime.now(timezone.utc)
+    monkeypatch.setattr("sgd.db.get_user", lambda uid: user_row())
+    monkeypatch.setattr("sgd.db.devices_of", lambda uid, *a: [
+        {"device_label": "Stremio (Android TV)", "fingerprint": "abc",
+         "started_at": agora, "last_seen": agora},
+    ])
+    monkeypatch.setattr("sgd.db.titles_of", lambda uid, *a: [
+        {"imdb_id": "tt0903747", "views": 4, "first_seen": agora, "last_seen": agora},
+    ])
+    monkeypatch.setattr("sgd.db.playing_now", lambda uid, *a: [
+        {"session_id": "s1", "file_id": "F1", "file_name": "Breaking Bad S04E08.mkv",
+         "started_at": agora, "last_seen": agora},
+    ])
+
+    corpo = client.get(f"/api/admin/users/{UID}/activity", headers=auth()).get_json()
+
+    assert corpo["devices"][0]["device_label"] == "Stremio (Android TV)"
+    assert corpo["titles"][0]["views"] == 4
+    # O nome do arquivo é a peça que só o Worker tinha.
+    assert corpo["playing"][0]["file_name"] == "Breaking Bad S04E08.mkv"
+
+
+def test_one_broken_half_does_not_take_the_others_down(client, monkeypatch):
+    monkeypatch.setattr("sgd.db.get_user", lambda uid: user_row())
+    monkeypatch.setattr("sgd.db.devices_of", lambda uid, *a: [{"device_label": "TV", "fingerprint": "x"}])
+
+    def boom(*a, **k):
+        raise RuntimeError("sem tabela")
+
+    monkeypatch.setattr("sgd.db.titles_of", boom)
+    monkeypatch.setattr("sgd.db.playing_now", boom)
+
+    corpo = client.get(f"/api/admin/users/{UID}/activity", headers=auth()).get_json()
+
+    assert corpo["devices"][0]["device_label"] == "TV"
+    assert corpo["titles"] == []
+    assert corpo["playing"] == []
+
+
+def test_activity_of_an_unknown_account_is_a_404(client, monkeypatch):
+    monkeypatch.setattr("sgd.db.get_user", lambda uid: None)
+
+    assert client.get(f"/api/admin/users/{UID}/activity", headers=auth()).status_code == 404
+
+
+def test_activity_needs_the_service_token(client):
+    assert client.get(f"/api/admin/users/{UID}/activity").status_code == 401
